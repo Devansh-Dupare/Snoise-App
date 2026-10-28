@@ -27,6 +27,7 @@ target_sources(SpectralNoiseCancellation PRIVATE
     Source/MainComponent.cpp
     Source/audio/PlaybackController.cpp
     Source/ui/WaveformView.cpp
+    Source/ui/NoiseProfileView.cpp
     ${CORE_SOURCES})
 
 target_include_directories(SpectralNoiseCancellation PRIVATE Source)

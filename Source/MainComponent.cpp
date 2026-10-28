@@ -3,6 +3,7 @@
 MainComponent::MainComponent()
 {
     addAndMakeVisible (waveform);
+    addAndMakeVisible (noiseProfileView);
     addAndMakeVisible (loadButton);
     addAndMakeVisible (playButton);
     addAndMakeVisible (saveButton);
@@ -26,6 +27,8 @@ MainComponent::MainComponent()
     };
 
     waveform.onSeek = [this] (double seconds) { playback.setPositionSeconds (seconds); };
+    waveform.onRegionSelected = [this] (double start, double end) { useNoiseRegion (start, end); };
+    noiseProfileView.onLoadNoiseFile = [this] { chooseAndLoadNoiseFile(); };
 
     updateButtons();
     setSize (1440, 900);
@@ -56,6 +59,8 @@ void MainComponent::resized()
 
     area.removeFromTop (16);
     waveform.setBounds (area.removeFromTop (220));
+    area.removeFromTop (16);
+    noiseProfileView.setBounds (area.removeFromTop (260).removeFromLeft (560));
 }
 
 void MainComponent::timerCallback()
@@ -73,6 +78,7 @@ void MainComponent::updateButtons()
     playButton.setEnabled (hasAudio);
     saveButton.setEnabled (hasAudio);
     playButton.setButtonText (playback.isPlaying() ? "Stop" : "Play");
+    noiseProfileView.setLoadEnabled (hasAudio);
 }
 
 void MainComponent::showError (const juce::String& message)
@@ -108,6 +114,7 @@ void MainComponent::chooseAndLoadFile()
         inputFile = file;
         playback.setAudio (input.buffer, input.sampleRate);
         waveform.setAudio (input.buffer, input.sampleRate);
+        clearNoiseProfile();
 
         statusLabel.setText (file.getFileName() + "  -  " + juce::String (input.sampleRate, 0) + " Hz, "
                                  + juce::String (input.buffer.getNumChannels()) + " ch, "
@@ -138,5 +145,72 @@ void MainComponent::chooseAndSaveFile()
             showError (result.getErrorMessage());
         else
             statusLabel.setText ("Saved " + file.withFileExtension ("wav").getFileName(), juce::dontSendNotification);
+    });
+}
+
+void MainComponent::clearNoiseProfile()
+{
+    noiseProfiles.clear();
+    noiseProfileView.clearProfile();
+    waveform.clearRegion();
+}
+
+void MainComponent::showProfile (const juce::String& description)
+{
+    noiseProfileView.setProfile (noiseProfiles[0].getAverageMagnitude(), input.sampleRate,
+                                 description + " (" + juce::String (noiseProfiles[0].getFrameCount()) + " frames)");
+}
+
+void MainComponent::useNoiseRegion (double startSeconds, double endSeconds)
+{
+    const auto startSample = static_cast<int> (std::llround (startSeconds * input.sampleRate));
+    const auto endSample = static_cast<int> (std::llround (endSeconds * input.sampleRate));
+
+    const auto result = engine.estimateProfileFromRegion (input.buffer, startSample, endSample - startSample, noiseProfiles);
+
+    if (result.failed())
+    {
+        clearNoiseProfile();
+        showError (result.getErrorMessage());
+        return;
+    }
+
+    showProfile ("Region " + juce::String (startSeconds, 2) + " - " + juce::String (endSeconds, 2) + " s");
+}
+
+void MainComponent::chooseAndLoadNoiseFile()
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+
+    chooser = std::make_unique<juce::FileChooser> ("Choose a noise-only recording", juce::File(), formats.getWildcardForAllFormats());
+
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [this] (const juce::FileChooser& fc)
+    {
+        const auto file = fc.getResult();
+        if (file == juce::File())
+            return;
+
+        AudioFileManager::LoadedAudio noise;
+        auto result = AudioFileManager::load (file, noise);
+
+        if (result.wasOk())
+            result = NoiseReductionEngine::checkSampleRates (input.sampleRate, noise.sampleRate);
+
+        if (result.wasOk())
+            result = engine.estimateProfile (noise.buffer, noiseProfiles);
+
+        if (result.failed())
+        {
+            showError (result.getErrorMessage());
+            return;
+        }
+
+        waveform.clearRegion();
+        showProfile ("File " + file.getFileName());
+
+        if (noise.numNonFiniteReplaced > 0)
+            showError (juce::String (noise.numNonFiniteReplaced) + " invalid (NaN/Inf) samples in the noise file were replaced with silence.");
     });
 }

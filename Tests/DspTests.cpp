@@ -279,6 +279,54 @@ struct AudioFileManagerTests : public juce::UnitTest
 
 static AudioFileManagerTests audioFileManagerTests;
 
+struct NoiseSelectionTests : public juce::UnitTest
+{
+    NoiseSelectionTests() : juce::UnitTest ("Noise selection", "SNC") {}
+
+    void runTest() override
+    {
+        const StftConfig config;
+        const NoiseReductionEngine engine (config);
+
+        beginTest ("a region profile only sees the selected samples");
+        {
+            // Silence, then loud noise from sample 20000 on.
+            juce::AudioBuffer<float> source (1, 40000);
+            source.clear();
+            std::mt19937 rng (7);
+            std::normal_distribution<float> dist (0.0f, 0.1f);
+            for (int i = 20000; i < 40000; ++i)
+                source.setSample (0, i, dist (rng));
+
+            std::vector<NoiseProfile> quiet, loud;
+            expect (engine.estimateProfileFromRegion (source, 0, 10000, quiet).wasOk());
+            expect (engine.estimateProfileFromRegion (source, 25000, 10000, loud).wasOk());
+            expectEquals (quiet[0].getFrameCount(), 1 + (10000 - config.fftSize()) / config.hopSize);
+            expectEquals (quiet[0].getAverageMagnitude()[100], 0.0f);
+            expect (loud[0].getAverageMagnitude()[100] > 1.0f);
+        }
+
+        beginTest ("region shorter than N is rejected; out-of-range regions are clamped");
+        {
+            juce::AudioBuffer<float> source (1, 10000);
+            source.clear();
+            std::vector<NoiseProfile> profiles;
+            expect (engine.estimateProfileFromRegion (source, 100, config.fftSize() - 1, profiles).failed());
+            expect (engine.estimateProfileFromRegion (source, 9000, 5000, profiles).failed());     // clamps to 1000 samples
+            expect (engine.estimateProfileFromRegion (source, -500, 20000, profiles).wasOk());     // clamps to whole buffer
+            expect (engine.estimateProfileFromRegion (source, 0, 0, profiles).failed());
+        }
+
+        beginTest ("noise file with a different sample rate is rejected");
+        {
+            expect (NoiseReductionEngine::checkSampleRates (44100.0, 44100.0).wasOk());
+            expect (NoiseReductionEngine::checkSampleRates (44100.0, 48000.0).failed());
+        }
+    }
+};
+
+static NoiseSelectionTests noiseSelectionTests;
+
 int main()
 {
     juce::UnitTestRunner runner;

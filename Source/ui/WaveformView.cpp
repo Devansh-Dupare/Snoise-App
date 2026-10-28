@@ -17,6 +17,21 @@ void WaveformView::setAudio (const juce::AudioBuffer<float>& audio, double sampl
     thumbnail.reset (audio.getNumChannels(), sampleRate, audio.getNumSamples());
     thumbnail.addBlock (0, audio, 0, audio.getNumSamples());
     playheadSeconds = 0.0;
+    clearRegion();
+    repaint();
+}
+
+void WaveformView::setRegion (double startSeconds, double endSeconds)
+{
+    hasRegion = true;
+    regionStart = juce::jmin (startSeconds, endSeconds);
+    regionEnd = juce::jmax (startSeconds, endSeconds);
+    repaint();
+}
+
+void WaveformView::clearRegion()
+{
+    hasRegion = dragging = false;
     repaint();
 }
 
@@ -70,6 +85,18 @@ void WaveformView::paint (juce::Graphics& g)
     g.setColour (waveformColour);
     thumbnail.drawChannels (g, plot, 0.0, thumbnail.getTotalLength(), 1.0f);
 
+    if (hasRegion)
+    {
+        const float x1 = xAtSeconds (regionStart), x2 = xAtSeconds (regionEnd);
+        g.setColour (accentColour.withAlpha (0.25f));
+        g.fillRect (x1, static_cast<float> (plot.getY()), x2 - x1, static_cast<float> (plot.getHeight()));
+        g.setColour (accentColour);
+        g.drawRect (x1, static_cast<float> (plot.getY()), x2 - x1, static_cast<float> (plot.getHeight()), 1.0f);
+        g.setFont (12.0f);
+        g.drawText ("Noise", juce::Rectangle<float> (x1 + 4.0f, static_cast<float> (plot.getY()) + 2.0f, 60.0f, 16.0f),
+                    juce::Justification::centredLeft);
+    }
+
     const float x = xAtSeconds (playheadSeconds);
     g.setColour (accentColour);
     g.drawLine (x, static_cast<float> (plot.getY()), x, static_cast<float> (plot.getBottom()), 2.0f);
@@ -77,11 +104,36 @@ void WaveformView::paint (juce::Graphics& g)
 
 void WaveformView::mouseDown (const juce::MouseEvent& e)
 {
-    if (onSeek && thumbnail.getTotalLength() > 0.0)
-        onSeek (secondsAtX (e.x));
+    dragging = false;
+    dragAnchorSeconds = secondsAtX (e.x);
 }
 
 void WaveformView::mouseDrag (const juce::MouseEvent& e)
 {
-    mouseDown (e);
+    if (thumbnail.getTotalLength() <= 0.0)
+        return;
+
+    if (! dragging && e.getDistanceFromDragStartX() < 4 && e.getDistanceFromDragStartX() > -4)
+        return;
+
+    dragging = true;
+    setRegion (dragAnchorSeconds, secondsAtX (e.x));
+}
+
+void WaveformView::mouseUp (const juce::MouseEvent& e)
+{
+    if (thumbnail.getTotalLength() <= 0.0)
+        return;
+
+    if (dragging)
+    {
+        dragging = false;
+
+        if (onRegionSelected)
+            onRegionSelected (regionStart, regionEnd);
+    }
+    else if (onSeek)
+    {
+        onSeek (secondsAtX (e.x));
+    }
 }
