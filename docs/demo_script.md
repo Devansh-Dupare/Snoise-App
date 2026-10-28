@@ -8,7 +8,7 @@ the fallback. Keep to about 3 minutes.
 - [ ] **Noise region.** Drag across the first 1.5 s of the waveform. Point out the noise profile plot (a
       smooth hiss shape plus a spike at 120 Hz). Mention that "Load noise file" with `noise_only.wav` gives
       the same profile.
-- [ ] **State the settings.** N = 2048, H = 512 (75 % overlap), periodic Hann analysis and synthesis, α = 1.8.
+- [ ] **State the settings.** N = 2048, H = 512 (75 % overlap), periodic Hann analysis and synthesis, α = 1.0 (the default).
 - [ ] **Process.** Press Process; the button shows progress. Show the processed spectrogram next to the original.
 - [ ] **A/B.** Play, then switch Original / Processed while it plays; the position is kept.
 - [ ] **α comparison.** Set α = 3.0 and process again; point out the thinner sound and any musical noise.

@@ -6,8 +6,8 @@ NoiseReductionPanel::NoiseReductionPanel()
     alphaSlider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     alphaSlider.setRotaryParameters (juce::degreesToRadians (225.0f), juce::degreesToRadians (495.0f), true);
     alphaSlider.setRange (0.0, 5.0, 0.05);
-    alphaSlider.setValue (1.8, juce::dontSendNotification);
-    alphaSlider.setDoubleClickReturnValue (true, 1.8);
+    alphaSlider.setValue (1.0, juce::dontSendNotification);
+    alphaSlider.setDoubleClickReturnValue (true, 1.0);
     alphaSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 70, 24);
     alphaSlider.setTooltip ("alpha: how much of the noise estimate is subtracted (double-click to reset)");
     addAndMakeVisible (alphaSlider);

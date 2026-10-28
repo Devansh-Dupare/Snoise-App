@@ -22,7 +22,7 @@ short-time spectrum of the recording and keep the original phase. The pipeline i
 4. Multiply the complex bin by G, so the phase is unchanged: Y = G·X.
 5. Inverse FFT, synthesis window, overlap-add and normalise to rebuild the waveform.
 
-The one user parameter is the subtraction factor α (default 1.8, range 0 to 5).
+The one user parameter is the subtraction factor α (default 1.0, range 0 to 5).
 
 ## 2. STFT and why overlapping windowed frames
 
@@ -149,7 +149,7 @@ threads and report back with `MessageManager::callAsync` through a `Component::S
 | Hop size H | 512 | 75 % overlap, 11.6 ms |
 | Analysis and synthesis window | periodic Hann | computed manually |
 | Bins | N/2 + 1 = 1025 | 21.5 Hz spacing at 44.1 kHz |
-| α | default 1.8, range 0 to 5, step 0.05 | double-click the knob to reset |
+| α | default 1.0, range 0 to 5, step 0.05 | double-click the knob to reset |
 | ε | 1e-10 | |
 
 Audio is processed offline as 32-bit float. Input samples that are NaN or Inf are replaced by 0 when a file
@@ -166,18 +166,20 @@ signal-to-noise ratio is −0.4 dB. `noise_only.wav` is a separate 3 s clip of t
 
 ### 8.1 Spectrograms
 
-![The application after processing noisy_synthetic.wav at alpha = 1.8](figures/app_processed_alpha1.8.png)
+![The application after processing noisy_synthetic.wav at alpha = 1.0](figures/app_processed_alpha1.0.png)
 
 *Figure 1. The application with `noisy_synthetic.wav` loaded, the first 1.5 s selected as the noise region,
-and the result processed at α = 1.8. The image is rendered offscreen from the application's own window
-component after the real load, profile and process steps (it is not a desktop screenshot).*
+and the result processed at the default α = 1.0. The image is rendered offscreen from the application's own
+window component after the real load, profile and process steps (it is not a desktop screenshot).*
 
 In the original spectrogram (top left) the noise is an even haze across the whole band, a little brighter at
 low frequencies, and the voice-like signal is only faintly visible as periodic bursts below about 2 kHz. In
-the processed spectrogram (top right) the background is almost black and those bursts, with their
-harmonic structure, stand out at about 2.5 per second. A few isolated bright specks remain in the
-upper half of the band. They look like the isolated residual peaks that cause musical noise (§4); whether
-they are audible is for the listening notes in §8.3 to say. The noise profile plot (bottom left) shows a smooth hiss slope falling with
+the processed spectrogram (top right) the haze is darker and mottled: at α = 1.0 part of the noise survives
+in any given frame, which is the −10 dB noise-only level in §8.2. The harmonic bursts, about 2.5 per second,
+are clearer than in the original. Raising α darkens the background further (in an earlier render at α = 1.8
+it was almost black, with a few isolated bright specks) at the cost of more signal damage. Specks like those
+look like the isolated residual peaks that cause musical noise (§4); whether they are audible is for the
+listening notes in §8.3 to say. The noise profile plot (bottom left) shows a smooth hiss slope falling with
 frequency and a narrow peak at the far left, which is the 120 Hz hum; it is estimated from the 0 to 1.5 s
 region (126 frames).
 
@@ -206,8 +208,8 @@ relative to the noisy file, with the profile from `noise_only.wav`:
 | α | SNR, region profile | SNR, noise-file profile | Noise-only level |
 |---|---|---|---|
 | 0 (bypass) | −0.4 dB | −0.4 dB | 0 dB |
-| 1.0 | 6.5 dB | 6.4 dB | −10 dB |
-| 1.8 (default) | 6.0 dB | 6.1 dB | −23 dB |
+| 1.0 (default) | 6.5 dB | 6.4 dB | −10 dB |
+| 1.8 | 6.0 dB | 6.1 dB | −23 dB |
 | 3.0 | 3.4 dB | 3.5 dB | −46 dB |
 | 5.0 | 1.5 dB | 1.5 dB | silent |
 
@@ -218,7 +220,9 @@ The two profile sources agree to within 0.15 dB, as they should for stationary n
 The SNR here is `signal energy / (error energy)`, where error includes both leftover noise and damage to
 the signal. It therefore peaks near α = 1 on this synthetic file and falls as α grows, even though the
 noise-only level keeps dropping: at higher α the algorithm removes more of the weaker harmonics along with
-the noise. The default of 1.8 favours a quieter background over the best SNR figure on this particular file.
+the noise. The default of 1.0 is where SNR peaked on this particular file. Larger values such as 1.8 give a much quieter
+noise-only section (−23 dB against −10 dB) at the cost of a little SNR, so which is better depends on what
+the listener prefers; that is for the listening notes below.
 
 **[TODO]** Add listening notes after auditioning with the A/B toggle at α = 1.0, 1.8 and 3.0 on both the
 demo file and a real speech recording with fan or hiss noise: how much residual noise is left, whether

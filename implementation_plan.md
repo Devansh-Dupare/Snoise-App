@@ -30,7 +30,7 @@ A standalone desktop application that removes steady background noise from a rec
 | Analysis window wₐ | Periodic Hann | Computed manually, see §6.1 |
 | Synthesis window wₛ | Periodic Hann | Same as wₐ |
 | Number of bins | N/2 + 1 = 1025 | Bins 0 … N/2 |
-| α (default) | 1.8 | Knob range 0.0 – 5.0, step 0.05 |
+| α (default) | 1.0 | Knob range 0.0 – 5.0, step 0.05 |
 | ε | 1e-10 | Float magnitudes are O(1e-4 … 1e3) |
 
 The **same** N, H and window are used for noise-profile estimation and for processing the input (brief, Technical Notes).
@@ -225,7 +225,7 @@ public:
     void setEpsilon (float newEpsilon);      // default 1e-10f
     void process (float* fftData, const NoiseProfile&, int numBins) const;
 private:
-    float alpha = 1.8f, epsilon = 1.0e-10f;
+    float alpha = 1.0f, epsilon = 1.0e-10f;
 };
 
 // AudioReconstructor.h
@@ -384,7 +384,7 @@ Window ≈ 1440 × 900, resizable with a minimum size. Light theme, white cards,
 | `WaveformView` | `AudioThumbnail` + `AudioThumbnailCache`; mouse drag creates the noise region | Find and mark the noise-only section |
 | `SpectrogramView` | `juce::Image` (frames × bins), filled from 20·log10(\|X\|/Σwₐ + 1e-9) (magnitude normalised by the window sum so a full-scale sine ≈ 0 dB; drawing only) mapped −90…0 dB → Magma LUT; two images (original, processed) | Show noise haze before and its removal after |
 | `NoiseProfileView` | Custom `paint()` path of 20·log10(D̄v(k)), x = frequency, y = dB; `TextButton` "Load noise file" | Confirm the profile looks sensible |
-| `NoiseReductionPanel` | `Slider` (RotaryHorizontalVerticalDrag), range 0–5, step 0.05, default 1.8, custom `drawRotarySlider` | The α parameter |
+| `NoiseReductionPanel` | `Slider` (RotaryHorizontalVerticalDrag), range 0–5, step 0.05, default 1.0, custom `drawRotarySlider` | The α parameter |
 | `ActionsPanel` | `TextButton` Process (filled), Play, Save (outlined) | Run, audition, export |
 
 `AppLookAndFeel` (subclass of `LookAndFeel_V4`) colours:
@@ -457,7 +457,7 @@ Recommended order of risk: get Phase 2 (identity test) right before touching sub
 ### Demo video
 - [ ] Load the noisy file and play the original.
 - [ ] Drag-select the noise region (or load a noise file) and show the profile.
-- [ ] State: **N = 2048, H = 512 (75% overlap), periodic Hann analysis and synthesis, α = 1.8**.
+- [ ] State: **N = 2048, H = 512 (75% overlap), periodic Hann analysis and synthesis, α = 1.0**.
 - [ ] Process; show the processed spectrogram.
 - [ ] A/B switch during playback.
 - [ ] Briefly show α = 3.0 to demonstrate musical-noise artefacts.

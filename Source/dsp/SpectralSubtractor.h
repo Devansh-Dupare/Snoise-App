@@ -17,5 +17,5 @@ public:
     void process (float* fftData, const NoiseProfile& profile, int numBins) const;
 
 private:
-    float alpha = 1.8f, epsilon = 1.0e-10f;
+    float alpha = 1.0f, epsilon = 1.0e-10f;
 };
