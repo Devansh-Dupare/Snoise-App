@@ -46,8 +46,9 @@ The **same** N, H and window are used for noise-profile estimation and for proce
 ### 3.1 Folder structure
 
 ```
-SpectralNoiseCancellation/
+Snoise-App/                          // repo root (CMake project: SpectralNoiseCancellation)
 ├── CMakeLists.txt
+├── .gitignore
 ├── Source/
 │   ├── Main.cpp                     // JUCEApplication + DocumentWindow
 │   ├── MainComponent.h/.cpp         // wires everything together
@@ -77,7 +78,9 @@ SpectralNoiseCancellation/
     └── report.md
 ```
 
-### 3.2 CMakeLists.txt (starting point)
+Keep `AudioFileManager` free of GUI code (`FileChooser` lives in the UI layer): it is compiled into the console test target too.
+
+### 3.2 CMakeLists.txt (target state; the scaffold adds sources phase by phase)
 
 ```cmake
 cmake_minimum_required(VERSION 3.22)
@@ -143,15 +146,15 @@ target_link_libraries(SNC_Tests PRIVATE juce::juce_audio_formats juce::juce_dsp
 
 ```mermaid
 flowchart LR
-    A[AudioFileManager<br/>load input] --> B[WaveformView<br/>select noise region]
-    A2[AudioFileManager<br/>load noise file] --> C
-    B --> C[NoiseProfile<br/>D̄v(k)]
-    A --> D[FrameProcessor<br/>frame + window + FFT]
-    D --> E[SpectralSubtractor<br/>G(m,k), Y = G·X]
+    A["AudioFileManager<br/>load input"] --> B["WaveformView<br/>select noise region"]
+    A2["AudioFileManager<br/>load noise file"] --> C
+    B --> C["NoiseProfile<br/>D̄v(k)"]
+    A --> D["FrameProcessor<br/>frame + window + FFT"]
+    D --> E["SpectralSubtractor<br/>G(m,k), Y = G·X"]
     C --> E
-    E --> F[AudioReconstructor<br/>IFFT + ws + OLA + normalise]
-    F --> G[PlaybackController<br/>A/B audition]
-    F --> H[AudioFileManager<br/>save WAV]
+    E --> F["AudioReconstructor<br/>IFFT + ws + OLA + normalise"]
+    F --> G["PlaybackController<br/>A/B audition"]
+    F --> H["AudioFileManager<br/>save WAV"]
 ```
 
 `NoiseReductionEngine` owns one `FrameProcessor`, `SpectralSubtractor` and `AudioReconstructor` and runs the loop for each channel. The UI never calls DSP classes directly; it talks to `MainComponent`, which starts jobs on a background thread.
@@ -180,7 +183,8 @@ struct StftConfig
     int hopSize  = 512;                      // H
     int fftSize() const  { return 1 << fftOrder; }
     int numBins() const  { return fftSize() / 2 + 1; }
-    int numFrames (int numSamples) const;    // 1 + (L - N) / H, after padding
+    int paddedLength (int numSamples) const; // + (N - H) front, + end padding to fill last frame
+    int numFrames (int paddedLength) const;  // 1 + (paddedLength - N) / H (padded length, not raw)
 };
 
 // FrameProcessor.h
@@ -350,7 +354,7 @@ Process each channel independently with its own noise profile from the same regi
 - Processed is disabled until a result exists.
 
 ### 7.3 Saving
-`FileChooser::launchAsync` → `WavAudioFormat::createWriterFor` at the input sample rate, 24-bit by default. Check the output peak first; if it exceeds 1.0 (rare, since subtraction only lowers magnitudes), warn and offer to normalise.
+`FileChooser::launchAsync` → `WavAudioFormat::createWriterFor` at the input sample rate, 24-bit by default. Check the output peak first; if it exceeds 1.0 (uncommon, but overlap-add of modified frames can overshoot slightly), warn and offer to normalise.
 
 ---
 
@@ -378,7 +382,7 @@ Window ≈ 1440 × 900, resizable with a minimum size. Light theme, white cards,
 |---|---|---|
 | A/B toggle (top right) | Two `TextButton`s in a radio group | Switch Original / Processed |
 | `WaveformView` | `AudioThumbnail` + `AudioThumbnailCache`; mouse drag creates the noise region | Find and mark the noise-only section |
-| `SpectrogramView` | `juce::Image` (frames × bins), filled from 20·log10(\|X\|+1e-9) mapped −90…0 dB → Magma LUT; two images (original, processed) | Show noise haze before and its removal after |
+| `SpectrogramView` | `juce::Image` (frames × bins), filled from 20·log10(\|X\|/Σwₐ + 1e-9) (magnitude normalised by the window sum so a full-scale sine ≈ 0 dB; drawing only) mapped −90…0 dB → Magma LUT; two images (original, processed) | Show noise haze before and its removal after |
 | `NoiseProfileView` | Custom `paint()` path of 20·log10(D̄v(k)), x = frequency, y = dB; `TextButton` "Load noise file" | Confirm the profile looks sensible |
 | `NoiseReductionPanel` | `Slider` (RotaryHorizontalVerticalDrag), range 0–5, step 0.05, default 1.8, custom `drawRotarySlider` | The α parameter |
 | `ActionsPanel` | `TextButton` Process (filled), Play, Save (outlined) | Run, audition, export |
@@ -409,6 +413,7 @@ Spectrogram image is computed on the background thread after processing, then ha
 5. **Subtraction on noise only**: α = 1 on the same noise → output RMS drops by at least 10 dB.
 6. **SNR improvement**: 1 kHz sine + white noise; SNR after processing is higher than before.
 7. **Edge cases**: input shorter than N, silent input (all zeros → no NaN), stereo input.
+8. **Error paths**: noise region/file shorter than N is rejected (M = 0); noise file with a different sample rate is rejected; NaN/Inf input is sanitised.
 
 ### 10.2 Manual tests
 - Load speech + fan/hiss noise, select the first 1–2 s, process at α = 1.0, 1.8, 3.0 and listen for residual noise vs musical noise.
