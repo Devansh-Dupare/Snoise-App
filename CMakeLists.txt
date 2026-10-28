@@ -12,7 +12,9 @@ FetchContent_MakeAvailable(JUCE)
 set(CORE_SOURCES
     Source/dsp/StftConfig.cpp
     Source/dsp/FrameProcessor.cpp
-    Source/dsp/AudioReconstructor.cpp)
+    Source/dsp/AudioReconstructor.cpp
+    Source/dsp/NoiseProfile.cpp
+    Source/dsp/NoiseReductionEngine.cpp)
 
 # ---- Standalone GUI app (no plugin targets) ----
 juce_add_gui_app(SpectralNoiseCancellation

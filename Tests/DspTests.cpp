@@ -4,6 +4,9 @@
 #include "dsp/StftConfig.h"
 #include "dsp/FrameProcessor.h"
 #include "dsp/AudioReconstructor.h"
+#include "dsp/NoiseProfile.h"
+#include "dsp/NoiseReductionEngine.h"
+#include <random>
 
 struct StftConfigTests : public juce::UnitTest
 {
@@ -113,6 +116,79 @@ struct StftEngineTests : public juce::UnitTest
 };
 
 static StftEngineTests stftEngineTests;
+
+struct NoiseProfileTests : public juce::UnitTest
+{
+    NoiseProfileTests() : juce::UnitTest ("Noise profile", "SNC") {}
+
+    void runTest() override
+    {
+        const StftConfig config;
+
+        beginTest ("white noise of known RMS gives a flat noise profile; M matches the frame count");
+        {
+            const float sigma = 0.1f;
+            const int length = 88200;
+            std::mt19937 rng (1234);
+            std::normal_distribution<float> dist (0.0f, sigma);
+
+            juce::AudioBuffer<float> noise (1, length);
+            for (int i = 0; i < length; ++i)
+                noise.setSample (0, i, dist (rng));
+
+            std::vector<NoiseProfile> profiles;
+            const auto result = NoiseReductionEngine (config).estimateProfile (noise, profiles);
+            expect (result.wasOk());
+            expectEquals (static_cast<int> (profiles.size()), 1);
+
+            const auto& profile = profiles[0];
+            expect (profile.isReady());
+            expectEquals (profile.getFrameCount(), 1 + (length - config.fftSize()) / config.hopSize);
+
+            // E|V| = sigma * sqrt(sum(w^2)) * sqrt(pi) / 2, sum(w^2) = 3N/8 for a periodic Hann.
+            const double expected = sigma * std::sqrt (3.0 * config.fftSize() / 8.0) * std::sqrt (juce::MathConstants<double>::pi) / 2.0;
+            const auto& avg = profile.getAverageMagnitude();
+
+            double meanOverBins = 0.0;
+            float worstRelative = 0.0f;
+            for (int k = 1; k < config.numBins() - 1; ++k)   // DC and Nyquist are real-only
+            {
+                meanOverBins += avg[static_cast<size_t> (k)];
+                worstRelative = std::max (worstRelative, static_cast<float> (std::abs (avg[static_cast<size_t> (k)] / expected - 1.0)));
+            }
+            meanOverBins /= (config.numBins() - 2);
+
+            logMessage ("expected " + juce::String (expected) + ", mean " + juce::String (meanOverBins)
+                        + ", worst per-bin relative error " + juce::String (worstRelative));
+            expect (std::abs (meanOverBins / expected - 1.0) < 0.02);
+            expect (worstRelative < 0.4f);
+        }
+
+        beginTest ("noise shorter than N is rejected (M = 0)");
+        {
+            std::vector<NoiseProfile> profiles;
+            juce::AudioBuffer<float> shortNoise (1, config.fftSize() - 1);
+            shortNoise.clear();
+            expect (NoiseReductionEngine (config).estimateProfile (shortNoise, profiles).failed());
+
+            juce::AudioBuffer<float> exact (1, config.fftSize());
+            exact.clear();
+            expect (NoiseReductionEngine (config).estimateProfile (exact, profiles).wasOk());
+            expectEquals (profiles[0].getFrameCount(), 1);
+        }
+
+        beginTest ("stereo noise gives one profile per channel");
+        {
+            juce::AudioBuffer<float> stereo (2, 8192);
+            stereo.clear();
+            std::vector<NoiseProfile> profiles;
+            expect (NoiseReductionEngine (config).estimateProfile (stereo, profiles).wasOk());
+            expectEquals (static_cast<int> (profiles.size()), 2);
+        }
+    }
+};
+
+static NoiseProfileTests noiseProfileTests;
 
 int main()
 {
