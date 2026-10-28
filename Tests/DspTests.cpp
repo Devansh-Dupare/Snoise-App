@@ -6,6 +6,7 @@
 #include "dsp/AudioReconstructor.h"
 #include "dsp/NoiseProfile.h"
 #include "dsp/NoiseReductionEngine.h"
+#include "io/AudioFileManager.h"
 #include <random>
 
 struct StftConfigTests : public juce::UnitTest
@@ -189,6 +190,94 @@ struct NoiseProfileTests : public juce::UnitTest
 };
 
 static NoiseProfileTests noiseProfileTests;
+
+struct AudioFileManagerTests : public juce::UnitTest
+{
+    AudioFileManagerTests() : juce::UnitTest ("AudioFileManager", "SNC") {}
+
+    void runTest() override
+    {
+        juce::TemporaryFile temp (".wav");
+        const auto file = temp.getFile();
+
+        beginTest ("save then load returns the same audio (24-bit)");
+        {
+            juce::AudioBuffer<float> original (2, 10000);
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < original.getNumSamples(); ++i)
+                    original.setSample (ch, i, 0.8f * std::sin (0.01f * static_cast<float> (i) * static_cast<float> (ch + 1)));
+
+            expect (AudioFileManager::saveWav (file, original, 48000.0, 24).wasOk());
+
+            AudioFileManager::LoadedAudio loaded;
+            expect (AudioFileManager::load (file, loaded).wasOk());
+            expectEquals (loaded.sampleRate, 48000.0);
+            expectEquals (loaded.buffer.getNumChannels(), 2);
+            expectEquals (loaded.buffer.getNumSamples(), 10000);
+            expectEquals (loaded.numNonFiniteReplaced, 0);
+
+            float worst = 0.0f;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < 10000; ++i)
+                    worst = std::max (worst, std::abs (loaded.buffer.getSample (ch, i) - original.getSample (ch, i)));
+
+            logMessage ("max round-trip error " + juce::String (worst));
+            expect (worst < 1.0e-6f);
+        }
+
+        beginTest ("missing, corrupt and empty files are rejected");
+        {
+            AudioFileManager::LoadedAudio loaded;
+            expect (AudioFileManager::load (file.getSiblingFile ("does_not_exist_snc.wav"), loaded).failed());
+
+            file.replaceWithText ("this is not audio");
+            expect (AudioFileManager::load (file, loaded).failed());
+
+            juce::AudioBuffer<float> empty (1, 0);
+            expect (AudioFileManager::saveWav (file, empty, 44100.0).failed());
+
+            file.deleteFile();
+            {
+                juce::WavAudioFormat wav;
+                std::unique_ptr<juce::AudioFormatWriter> writer (wav.createWriterFor (file.createOutputStream().release(), 44100.0, 1, 16, {}, 0));
+                expect (writer != nullptr);
+            }
+            expect (AudioFileManager::load (file, loaded).failed());   // valid header, zero samples
+        }
+
+        beginTest ("NaN/Inf samples are replaced with 0 and counted");
+        {
+            juce::AudioBuffer<float> bad (1, 100);
+            bad.clear();
+            bad.setSample (0, 10, std::numeric_limits<float>::quiet_NaN());
+            bad.setSample (0, 20, std::numeric_limits<float>::infinity());
+            bad.setSample (0, 30, 0.5f);
+
+            expect (AudioFileManager::saveWav (file, bad, 44100.0, 32).wasOk());
+
+            AudioFileManager::LoadedAudio loaded;
+            expect (AudioFileManager::load (file, loaded).wasOk());
+            expectEquals (loaded.numNonFiniteReplaced, 2);
+            expectEquals (loaded.buffer.getSample (0, 10), 0.0f);
+            expectEquals (loaded.buffer.getSample (0, 20), 0.0f);
+            expectEquals (loaded.buffer.getSample (0, 30), 0.5f);
+        }
+
+        beginTest ("saving to an unwritable location fails");
+        expect (AudioFileManager::saveWav (juce::File ("/nonexistent_dir_snc/out.wav"),
+                                           juce::AudioBuffer<float> (1, 10), 44100.0).failed());
+
+        beginTest ("getPeak");
+        {
+            juce::AudioBuffer<float> b (2, 4);
+            b.clear();
+            b.setSample (1, 2, -0.75f);
+            expectEquals (AudioFileManager::getPeak (b), 0.75f);
+        }
+    }
+};
+
+static AudioFileManagerTests audioFileManagerTests;
 
 int main()
 {

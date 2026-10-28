@@ -14,7 +14,8 @@ set(CORE_SOURCES
     Source/dsp/FrameProcessor.cpp
     Source/dsp/AudioReconstructor.cpp
     Source/dsp/NoiseProfile.cpp
-    Source/dsp/NoiseReductionEngine.cpp)
+    Source/dsp/NoiseReductionEngine.cpp
+    Source/io/AudioFileManager.cpp)
 
 # ---- Standalone GUI app (no plugin targets) ----
 juce_add_gui_app(SpectralNoiseCancellation
@@ -24,6 +25,8 @@ juce_add_gui_app(SpectralNoiseCancellation
 target_sources(SpectralNoiseCancellation PRIVATE
     Source/Main.cpp
     Source/MainComponent.cpp
+    Source/audio/PlaybackController.cpp
+    Source/ui/WaveformView.cpp
     ${CORE_SOURCES})
 
 target_include_directories(SpectralNoiseCancellation PRIVATE Source)
