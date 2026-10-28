@@ -709,6 +709,78 @@ struct RobustnessTests : public juce::UnitTest
 
 static RobustnessTests robustnessTests;
 
+// Runs the demo files in TestAudio/ (see tools/make_test_audio.py) through the whole pipeline and logs
+// the figures quoted in docs/report.md. Skipped when the files have not been generated.
+struct DemoFileTests : public juce::UnitTest
+{
+    DemoFileTests() : juce::UnitTest ("Demo files", "SNC") {}
+
+    static double snrDb (const juce::AudioBuffer<float>& clean, const juce::AudioBuffer<float>& test)
+    {
+        double signal = 0.0, error = 0.0;
+        for (int i = 0; i < clean.getNumSamples(); ++i)
+        {
+            const double c = clean.getSample (0, i), d = test.getSample (0, i) - c;
+            signal += c * c;
+            error += d * d;
+        }
+        return 10.0 * std::log10 (signal / error);
+    }
+
+    void runTest() override
+    {
+        const auto dir = juce::File (__FILE__).getParentDirectory().getParentDirectory().getChildFile ("TestAudio");
+        AudioFileManager::LoadedAudio noisy, clean, noiseFile;
+
+        beginTest ("alpha sweep on noisy_synthetic.wav (region profile and noise-file profile)");
+
+        if (! AudioFileManager::load (dir.getChildFile ("noisy_synthetic.wav"), noisy).wasOk()
+            || ! AudioFileManager::load (dir.getChildFile ("clean_synthetic.wav"), clean).wasOk()
+            || ! AudioFileManager::load (dir.getChildFile ("noise_only.wav"), noiseFile).wasOk())
+        {
+            logMessage ("TestAudio files not found; skipping (run tools/make_test_audio.py)");
+            return;
+        }
+
+        const NoiseReductionEngine engine;
+        const std::atomic<bool> noCancel { false };
+
+        std::vector<NoiseProfile> fromRegion, fromFile;
+        expect (engine.estimateProfileFromRegion (noisy.buffer, 0, static_cast<int> (1.5 * noisy.sampleRate), fromRegion).wasOk());
+        expect (engine.estimateProfile (noiseFile.buffer, fromFile).wasOk());
+        expect (NoiseReductionEngine::checkSampleRates (noisy.sampleRate, noiseFile.sampleRate).wasOk());
+
+        const double before = snrDb (clean.buffer, noisy.buffer);
+        logMessage ("SNR of the noisy file: " + juce::String (before, 2) + " dB");
+
+        double snrAtDefault = 0.0;
+        for (const float alpha : { 0.0f, 1.0f, 1.8f, 3.0f, 5.0f })
+        {
+            juce::AudioBuffer<float> a, b;
+            expect (engine.process (noisy.buffer, fromRegion, alpha, a, {}, noCancel).wasOk());
+            expect (engine.process (noisy.buffer, fromFile, alpha, b, {}, noCancel).wasOk());
+
+            // Level change over the first 1.5 s, which holds noise only (the file profile is independent of it).
+            const int leadLength = static_cast<int> (1.5 * noisy.sampleRate);
+            juce::AudioBuffer<float> leadIn (1, leadLength), leadOut (1, leadLength);
+            leadIn.copyFrom (0, 0, noisy.buffer, 0, 0, leadLength);
+            leadOut.copyFrom (0, 0, b, 0, 0, leadLength);
+            const double noiseChange = 20.0 * std::log10 (juce::jmax (1.0e-9, rms (leadOut) / rms (leadIn)));
+
+            logMessage ("alpha " + juce::String (alpha, 1) + ": SNR " + juce::String (snrDb (clean.buffer, a), 2)
+                        + " dB (region profile), " + juce::String (snrDb (clean.buffer, b), 2) + " dB (noise file); noise-only level "
+                        + juce::String (noiseChange, 1) + " dB (noise file)");
+
+            if (juce::approximatelyEqual (alpha, 1.8f))
+                snrAtDefault = snrDb (clean.buffer, a);
+        }
+
+        expect (snrAtDefault > before + 6.0);
+    }
+};
+
+static DemoFileTests demoFileTests;
+
 int main()
 {
     juce::UnitTestRunner runner;
