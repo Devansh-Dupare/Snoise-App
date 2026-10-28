@@ -3,8 +3,9 @@
 A standalone JUCE 8 application that removes steady background noise from a recording using a noise
 profile and magnitude spectral subtraction. Processing is offline, built on `juce::dsp::FFT`.
 
-> **To finish before submitting:** the places marked **[TODO]** need things only a person at the machine can
-> supply: spectrogram screenshots from the running app (§8.1) and listening notes (§8.3). Every number in
+> **To finish before submitting:** the place marked **[TODO]** needs something only a person at the machine can
+> supply: listening notes (§8.3). Figure 1 (§8.1) is rendered by the app itself, so replace it with a real
+> desktop screenshot if your marker expects one. Every number in
 > this report comes from the unit-test log (`SNC_Tests`) and can be reproduced with the commands in §8.
 
 ---
@@ -165,10 +166,20 @@ signal-to-noise ratio is −0.4 dB. `noise_only.wav` is a separate 3 s clip of t
 
 ### 8.1 Spectrograms
 
-**[TODO]** Insert screenshots from the app: the original and processed spectrograms of
-`noisy_synthetic.wav` at α = 1.8, with the noise region (0 to 1.5 s) selected. The expected picture is a
-uniform "haze" and a horizontal hum line at 120 Hz in the original, with the harmonics standing out in the
-processed one.
+![The application after processing noisy_synthetic.wav at alpha = 1.8](figures/app_processed_alpha1.8.png)
+
+*Figure 1. The application with `noisy_synthetic.wav` loaded, the first 1.5 s selected as the noise region,
+and the result processed at α = 1.8. The image is rendered offscreen from the application's own window
+component after the real load, profile and process steps (it is not a desktop screenshot).*
+
+In the original spectrogram (top left) the noise is an even haze across the whole band, a little brighter at
+low frequencies, and the voice-like signal is only faintly visible as periodic bursts below about 2 kHz. In
+the processed spectrogram (top right) the background is almost black and those bursts, with their
+harmonic structure, stand out at about 2.5 per second. A few isolated bright specks remain in the
+upper half of the band. They look like the isolated residual peaks that cause musical noise (§4); whether
+they are audible is for the listening notes in §8.3 to say. The noise profile plot (bottom left) shows a smooth hiss slope falling with
+frequency and a narrow peak at the far left, which is the 120 Hz hum; it is estimated from the 0 to 1.5 s
+region (126 frames).
 
 ### 8.2 Measured behaviour
 
