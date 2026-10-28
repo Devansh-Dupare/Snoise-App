@@ -15,6 +15,7 @@ set(CORE_SOURCES
     Source/dsp/AudioReconstructor.cpp
     Source/dsp/NoiseProfile.cpp
     Source/dsp/SpectralSubtractor.cpp
+    Source/dsp/Spectrogram.cpp
     Source/dsp/NoiseReductionEngine.cpp
     Source/io/AudioFileManager.cpp)
 
@@ -29,6 +30,10 @@ target_sources(SpectralNoiseCancellation PRIVATE
     Source/audio/PlaybackController.cpp
     Source/ui/WaveformView.cpp
     Source/ui/NoiseProfileView.cpp
+    Source/ui/SpectrogramView.cpp
+    Source/ui/AppLookAndFeel.cpp
+    Source/ui/NoiseReductionPanel.cpp
+    Source/ui/ActionsPanel.cpp
     ${CORE_SOURCES})
 
 target_include_directories(SpectralNoiseCancellation PRIVATE Source)

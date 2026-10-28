@@ -5,7 +5,10 @@
 #include "audio/PlaybackController.h"
 #include "io/AudioFileManager.h"
 #include "dsp/NoiseReductionEngine.h"
+#include "ui/ActionsPanel.h"
 #include "ui/NoiseProfileView.h"
+#include "ui/NoiseReductionPanel.h"
+#include "ui/SpectrogramView.h"
 #include "ui/WaveformView.h"
 
 class MainComponent : public juce::Component, private juce::Timer
@@ -49,10 +52,12 @@ private:
     std::atomic<bool> cancelRequested { false };
     std::unique_ptr<juce::Thread> worker;
 
-    juce::TextButton loadButton { "Load audio" }, playButton { "Play" }, saveButton { "Save WAV" },
-                     processButton { "Process" }, originalButton { "Original" }, processedButton { "Processed" };
-    juce::Slider alphaSlider;
-    juce::Label alphaLabel;
+    juce::TextButton loadButton { "Open audio" }, originalButton { "Original" }, processedButton { "Processed" };
+    SpectrogramView originalSpectrogram { "Original", "Load an audio file" };
+    SpectrogramView processedSpectrogram { "Processed", "Mark some noise, then press Process" };
+    NoiseReductionPanel reductionPanel;
+    ActionsPanel actions;
+    juce::TooltipWindow tooltipWindow { this };
     juce::Label statusLabel;
     std::unique_ptr<juce::FileChooser> chooser;
 

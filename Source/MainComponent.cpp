@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "ui/AppLookAndFeel.h"
 
 namespace
 {
@@ -19,22 +20,15 @@ MainComponent::MainComponent()
     addAndMakeVisible (waveform);
     addAndMakeVisible (noiseProfileView);
     addAndMakeVisible (loadButton);
-    addAndMakeVisible (playButton);
-    addAndMakeVisible (saveButton);
     addAndMakeVisible (statusLabel);
-    addAndMakeVisible (processButton);
+    addAndMakeVisible (originalSpectrogram);
+    addAndMakeVisible (processedSpectrogram);
+    addAndMakeVisible (reductionPanel);
+    addAndMakeVisible (actions);
     addAndMakeVisible (originalButton);
     addAndMakeVisible (processedButton);
-    addAndMakeVisible (alphaSlider);
-    addAndMakeVisible (alphaLabel);
 
-    alphaSlider.setRange (0.0, 5.0, 0.05);
-    alphaSlider.setValue (1.8, juce::dontSendNotification);
-    alphaSlider.setSliderStyle (juce::Slider::LinearHorizontal);
-    alphaSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 24);
-    alphaSlider.onValueChange = [this] { markStale(); };
-    alphaLabel.setText ("Noise reduction (alpha)", juce::dontSendNotification);
-    alphaLabel.setColour (juce::Label::textColourId, juce::Colour (0xff1d1d1f));
+    reductionPanel.alphaSlider.onValueChange = [this] { markStale(); };
 
     originalButton.setRadioGroupId (1);
     processedButton.setRadioGroupId (1);
@@ -43,7 +37,7 @@ MainComponent::MainComponent()
     originalButton.setToggleState (true, juce::dontSendNotification);
     originalButton.onClick = [this] { selectVersion (false); };
     processedButton.onClick = [this] { selectVersion (true); };
-    processButton.onClick = [this]
+    actions.processButton.onClick = [this]
     {
         if (isProcessing)
             cancelRequested = true;
@@ -57,8 +51,8 @@ MainComponent::MainComponent()
                          juce::dontSendNotification);
 
     loadButton.onClick = [this] { chooseAndLoadFile(); };
-    saveButton.onClick = [this] { chooseAndSaveFile(); };
-    playButton.onClick = [this]
+    actions.saveButton.onClick = [this] { chooseAndSaveFile(); };
+    actions.playButton.onClick = [this]
     {
         if (playback.isPlaying())
             playback.stop();
@@ -87,71 +81,83 @@ MainComponent::~MainComponent()
 
 void MainComponent::paint (juce::Graphics& g)
 {
-    g.fillAll (juce::Colour (0xfff5f5f7));
+    g.fillAll (AppLookAndFeel::window);
+    g.setColour (AppLookAndFeel::textPrimary);
+    g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
+    g.drawText ("Spectral Noise Cancellation", 24, 24, 320, 44, juce::Justification::centredLeft);
 }
 
 void MainComponent::resized()
 {
     auto area = getLocalBounds().reduced (24);
-    auto bar = area.removeFromTop (40);
-    loadButton.setBounds (bar.removeFromLeft (130));
-    bar.removeFromLeft (12);
-    playButton.setBounds (bar.removeFromLeft (100));
-    bar.removeFromLeft (12);
-    saveButton.setBounds (bar.removeFromLeft (130));
-    bar.removeFromLeft (12);
-    processButton.setBounds (bar.removeFromLeft (150));
-    bar.removeFromLeft (12);
-    originalButton.setBounds (bar.removeFromLeft (90));
-    processedButton.setBounds (bar.removeFromLeft (90));
+    auto bar = area.removeFromTop (44);
+
+    bar.removeFromLeft (332);
+    loadButton.setBounds (bar.removeFromLeft (130).withSizeKeepingCentre (130, 36));
+    processedButton.setBounds (bar.removeFromRight (100).withSizeKeepingCentre (100, 36));
+    originalButton.setBounds (bar.removeFromRight (100).withSizeKeepingCentre (100, 36));
     bar.removeFromLeft (16);
+    bar.removeFromRight (16);
     statusLabel.setBounds (bar);
 
-    area.removeFromTop (16);
-    waveform.setBounds (area.removeFromTop (220));
-    area.removeFromTop (16);
-    auto lower = area.removeFromTop (260);
-    noiseProfileView.setBounds (lower.removeFromLeft (560));
-    lower.removeFromLeft (16);
-    auto alphaArea = lower.removeFromLeft (420).removeFromTop (70);
-    alphaLabel.setBounds (alphaArea.removeFromTop (28));
-    alphaSlider.setBounds (alphaArea);
+    const int gap = 14;
+    const int usable = area.getHeight() - 3 * gap;
+    area.removeFromTop (gap);
+    waveform.setBounds (area.removeFromTop (usable * 20 / 100));
+    area.removeFromTop (gap);
+
+    auto spectrograms = area.removeFromTop (usable * 38 / 100);
+    originalSpectrogram.setBounds (spectrograms.removeFromLeft ((spectrograms.getWidth() - gap) / 2));
+    spectrograms.removeFromLeft (gap);
+    processedSpectrogram.setBounds (spectrograms);
+
+    area.removeFromTop (gap);
+    actions.setBounds (area.removeFromRight (240));
+    area.removeFromRight (gap);
+    reductionPanel.setBounds (area.removeFromRight (280));
+    area.removeFromRight (gap);
+    noiseProfileView.setBounds (area);
 }
 
 void MainComponent::timerCallback()
 {
-    waveform.setPlayheadSeconds (playback.getPositionSeconds());
+    const double position = playback.getPositionSeconds();
+    waveform.setPlayheadSeconds (position);
+    originalSpectrogram.setPlayheadSeconds (position);
+    processedSpectrogram.setPlayheadSeconds (position);
 
     if (isProcessing)
-        processButton.setButtonText ("Cancel  " + juce::String (juce::roundToInt (progress.load() * 100.0f)) + "%");
+        actions.processButton.setButtonText ("Cancel  " + juce::String (juce::roundToInt (progress.load() * 100.0f)) + "%");
 
     const bool playing = playback.isPlaying();
-    if ((playButton.getButtonText() == "Stop") != playing)
+    if ((actions.playButton.getButtonText() == "Stop") != playing)
         updateButtons();
 }
 
 void MainComponent::updateButtons()
 {
     const bool hasAudio = input.buffer.getNumSamples() > 0;
-    playButton.setEnabled (hasAudio);
-    playButton.setButtonText (playback.isPlaying() ? "Stop" : "Play");
+    actions.playButton.setEnabled (hasAudio);
+    actions.playButton.setButtonText (playback.isPlaying() ? "Stop" : "Play");
     noiseProfileView.setLoadEnabled (hasAudio && ! isProcessing);
 
     const bool canProcess = hasAudio && ! noiseProfiles.empty();
-    processButton.setEnabled (isProcessing || canProcess);
-    processButton.setTooltip (! hasAudio ? "Load an audio file first"
+    actions.processButton.setEnabled (isProcessing || canProcess);
+    actions.processButton.setTooltip (! hasAudio ? "Load an audio file first"
                               : noiseProfiles.empty() ? "Drag on the waveform to mark noise, or load a noise file"
                                                       : "");
-    processButton.setColour (juce::TextButton::buttonColourId,
-                             stale && canProcess && ! isProcessing ? juce::Colour (0xfffc8961) : juce::Colour (0xff6e6e73));
+    actions.processButton.setColour (juce::TextButton::buttonColourId,
+                             stale && canProcess && ! isProcessing ? AppLookAndFeel::accent : AppLookAndFeel::card);
+    actions.processButton.setColour (juce::TextButton::textColourOffId,
+                                     stale && canProcess && ! isProcessing ? juce::Colours::white : AppLookAndFeel::textPrimary);
     if (! isProcessing)
-        processButton.setButtonText ("Process");
+        actions.processButton.setButtonText ("Process");
 
     processedButton.setEnabled (hasProcessed && ! isProcessing);
     originalButton.setEnabled (hasAudio && ! isProcessing);
-    alphaSlider.setEnabled (! isProcessing);
+    reductionPanel.alphaSlider.setEnabled (! isProcessing);
     loadButton.setEnabled (! isProcessing);
-    saveButton.setEnabled (hasAudio && ! isProcessing);
+    actions.saveButton.setEnabled (hasAudio && ! isProcessing);
 }
 
 void MainComponent::showError (const juce::String& message)
@@ -187,6 +193,8 @@ void MainComponent::chooseAndLoadFile()
         inputFile = file;
         playback.setAudio (input.buffer, input.sampleRate);
         waveform.setAudio (input.buffer, input.sampleRate);
+        originalSpectrogram.setAudio (input.buffer, input.sampleRate);
+        processedSpectrogram.clear();
         clearNoiseProfile();
         hasProcessed = processedSelected = false;
         stale = true;
@@ -321,7 +329,7 @@ void MainComponent::startProcessing()
                                            safeThis = juce::Component::SafePointer<MainComponent> (this),
                                            audioIn = input.buffer,
                                            profiles = noiseProfiles,
-                                           alpha = static_cast<float> (alphaSlider.getValue())]
+                                           alpha = static_cast<float> (reductionPanel.alphaSlider.getValue())]
     {
         const NoiseReductionEngine jobEngine;
         outcome->result = jobEngine.process (audioIn, profiles, alpha, outcome->audio,
@@ -348,12 +356,13 @@ void MainComponent::finishProcessing (juce::Result result, juce::AudioBuffer<flo
         processed = std::move (processedAudio);
         hasProcessed = true;
         stale = false;
-        statusLabel.setText ("Processed with alpha = " + juce::String (alphaSlider.getValue(), 2)
+        statusLabel.setText ("Processed with alpha = " + juce::String (reductionPanel.alphaSlider.getValue(), 2)
                                  + ". Use Original / Processed to compare.",
                              juce::dontSendNotification);
         processedButton.setToggleState (true, juce::dontSendNotification);
         processedSelected = true;
         playback.replaceAudio (processed, input.sampleRate);
+        processedSpectrogram.setAudio (processed, input.sampleRate);
     }
     else
     {

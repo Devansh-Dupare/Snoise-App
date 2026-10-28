@@ -7,6 +7,7 @@
 #include "dsp/NoiseProfile.h"
 #include "dsp/NoiseReductionEngine.h"
 #include "dsp/SpectralSubtractor.h"
+#include "dsp/Spectrogram.h"
 #include "io/AudioFileManager.h"
 #include <random>
 
@@ -522,6 +523,65 @@ struct SpectralSubtractionTests : public juce::UnitTest
 };
 
 static SpectralSubtractionTests spectralSubtractionTests;
+
+struct SpectrogramTests : public juce::UnitTest
+{
+    SpectrogramTests() : juce::UnitTest ("Spectrogram", "SNC") {}
+
+    void runTest() override
+    {
+        const StftConfig config;
+
+        beginTest ("a full-scale sine peaks near 0 dB in the right bin");
+        {
+            const double fs = 44100.0;
+            const int bin = 46;                                   // bin-centred frequency
+            const double freq = bin * fs / config.fftSize();
+            juce::AudioBuffer<float> sine (1, 44100);
+            for (int i = 0; i < sine.getNumSamples(); ++i)
+                sine.setSample (0, i, static_cast<float> (std::sin (2.0 * juce::MathConstants<double>::pi * freq * i / fs)));
+
+            const auto data = computeSpectrogram (sine, config);
+            expectEquals (data.numBins, config.numBins());
+            expectEquals (data.numFrames, 1 + (44100 - config.fftSize()) / config.hopSize);
+
+            const int m = data.numFrames / 2;
+            int peakBin = 0;
+            for (int k = 1; k < data.numBins; ++k)
+                if (data.at (m, k) > data.at (m, peakBin))
+                    peakBin = k;
+
+            logMessage ("peak bin " + juce::String (peakBin) + " at " + juce::String (data.at (m, peakBin), 2) + " dB");
+            expectEquals (peakBin, bin);
+            expect (std::abs (data.at (m, peakBin)) < 0.5f);
+        }
+
+        beginTest ("silence is very quiet and long files are decimated to maxFrames");
+        {
+            juce::AudioBuffer<float> silent (2, 200000);
+            silent.clear();
+            const auto data = computeSpectrogram (silent, config, 100);
+            expect (data.numFrames <= 100 && data.numFrames > 50);
+            for (const float db : data.decibels)
+                expect (db < -150.0f);
+        }
+
+        beginTest ("inputs shorter than N and empty inputs");
+        {
+            juce::AudioBuffer<float> tiny (1, 10);
+            tiny.clear();
+            expectEquals (computeSpectrogram (tiny, config).numFrames, 1);
+            expectEquals (computeSpectrogram (juce::AudioBuffer<float> (1, 0), config).numFrames, 0);
+
+            const std::atomic<bool> cancelled { true };
+            juce::AudioBuffer<float> some (1, 20000);
+            some.clear();
+            expectEquals (computeSpectrogram (some, config, 4096, &cancelled).numFrames, 0);
+        }
+    }
+};
+
+static SpectrogramTests spectrogramTests;
 
 int main()
 {
