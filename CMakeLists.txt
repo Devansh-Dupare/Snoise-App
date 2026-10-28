@@ -10,7 +10,9 @@ FetchContent_MakeAvailable(JUCE)
 
 # ---- Shared DSP + IO code (used by app and tests); grows phase by phase ----
 set(CORE_SOURCES
-    Source/dsp/StftConfig.cpp)
+    Source/dsp/StftConfig.cpp
+    Source/dsp/FrameProcessor.cpp
+    Source/dsp/AudioReconstructor.cpp)
 
 # ---- Standalone GUI app (no plugin targets) ----
 juce_add_gui_app(SpectralNoiseCancellation
