@@ -112,7 +112,7 @@ juce::Result NoiseReductionEngine::process (const juce::AudioBuffer<float>& inpu
         std::fill (paddedSignal.begin(), paddedSignal.end(), 0.0f);
         const float* in = input.getReadPointer (ch);
         for (int i = 0; i < numSamples; ++i)
-            paddedSignal[static_cast<size_t> (frontPad + i)] = std::isfinite (in[i]) ? in[i] : 0.0f;
+            paddedSignal[static_cast<size_t> (frontPad + i)] = in[i];   // analyseFrame sanitises
 
         reconstructor.prepare (padded);
 

@@ -9,7 +9,26 @@
 #include "dsp/SpectralSubtractor.h"
 #include "dsp/Spectrogram.h"
 #include "io/AudioFileManager.h"
+#include <atomic>
+#include <cstdlib>
+#include <new>
 #include <random>
+
+// ---- Heap allocation counter (plan §10 / phase 6: no allocations in the frame loop) ----
+static std::atomic<long> gAllocationCount { 0 };
+
+void* operator new (std::size_t size)
+{
+    ++gAllocationCount;
+
+    if (void* p = std::malloc (size > 0 ? size : 1))
+        return p;
+
+    throw std::bad_alloc();
+}
+
+void operator delete (void* p) noexcept { std::free (p); }
+void operator delete (void* p, std::size_t) noexcept { std::free (p); }
 
 struct StftConfigTests : public juce::UnitTest
 {
@@ -582,6 +601,113 @@ struct SpectrogramTests : public juce::UnitTest
 };
 
 static SpectrogramTests spectrogramTests;
+
+struct RobustnessTests : public juce::UnitTest
+{
+    RobustnessTests() : juce::UnitTest ("Robustness", "SNC") {}
+
+    void runTest() override
+    {
+        const StftConfig config;
+        const NoiseReductionEngine engine (config);
+        const std::atomic<bool> noCancel { false };
+
+        beginTest ("the per-frame loop performs no heap allocations");
+        {
+            const int length = 50000;
+            const int padded = config.paddedLength (length);
+            const int n = config.fftSize();
+
+            std::vector<NoiseProfile> profiles;
+            expect (engine.estimateProfile (makeWhiteNoise (1, 20000, 0.1f, 21), profiles).wasOk());
+
+            std::vector<float> signal (static_cast<size_t> (padded), 0.1f), frame (static_cast<size_t> (2 * n));
+            const FrameProcessor analyser (config);
+            AudioReconstructor reconstructor (config, analyser.getAnalysisWindow());
+            reconstructor.prepare (padded);
+            SpectralSubtractor subtractor;
+
+            const long before = gAllocationCount.load();
+            for (int m = 0; m < config.numFrames (padded); ++m)
+            {
+                analyser.analyseFrame (signal.data(), padded, m, frame.data());
+                subtractor.process (frame.data(), profiles[0], config.numBins());
+                reconstructor.addFrame (frame.data(), m);
+            }
+            const long during = gAllocationCount.load() - before;
+            logMessage ("allocations during " + juce::String (config.numFrames (padded)) + " frames: " + juce::String (during));
+            expectEquals (during, 0L);
+        }
+
+        beginTest ("engine allocation count does not grow with the number of frames");
+        {
+            std::vector<NoiseProfile> profiles;
+            expect (engine.estimateProfile (makeWhiteNoise (1, 20000, 0.1f, 22), profiles).wasOk());
+            const auto shortInput = makeWhiteNoise (1, 10000, 0.1f, 23);
+            const auto longInput = makeWhiteNoise (1, 400000, 0.1f, 24);
+            juce::AudioBuffer<float> out;
+            auto progress = [] (float) {};
+
+            long before = gAllocationCount.load();
+            expect (engine.process (shortInput, profiles, 1.0f, out, progress, noCancel).wasOk());
+            const long shortCount = gAllocationCount.load() - before;
+
+            before = gAllocationCount.load();
+            expect (engine.process (longInput, profiles, 1.0f, out, progress, noCancel).wasOk());
+            const long longCount = gAllocationCount.load() - before;
+
+            logMessage ("allocations: short input " + juce::String (shortCount) + ", 40x longer input " + juce::String (longCount));
+            expectEquals (longCount, shortCount);
+        }
+
+        beginTest ("NaN, Inf and huge samples never produce non-finite output");
+        {
+            const float huge = 3.0e38f, nan = std::numeric_limits<float>::quiet_NaN(), inf = std::numeric_limits<float>::infinity();
+
+            auto noise = makeWhiteNoise (1, 20000, 0.1f, 25);
+            noise.setSample (0, 5, nan);
+            noise.setSample (0, 6, -inf);
+            noise.setSample (0, 7, huge);
+            std::vector<NoiseProfile> profiles;
+            expect (engine.estimateProfile (noise, profiles).wasOk());
+            for (const float v : profiles[0].getAverageMagnitude())
+                expect (std::isfinite (v));
+
+            auto input = makeWhiteNoise (2, 20000, 0.1f, 26);
+            for (int i = 0; i < 20000; i += 97)
+            {
+                input.setSample (0, i, (i % 3 == 0) ? nan : (i % 3 == 1) ? inf : -huge);
+                input.setSample (1, i, huge);
+            }
+
+            juce::AudioBuffer<float> out;
+            for (const float alpha : { 0.0f, 1.8f, 5.0f })
+            {
+                expect (engine.process (input, profiles, alpha, out, {}, noCancel).wasOk());
+                expect (allFinite (out));
+            }
+
+            const auto data = computeSpectrogram (input, config);
+            for (const float db : data.decibels)
+                expect (std::isfinite (db));
+        }
+
+        beginTest ("a profile built from silence and a silent input stay finite (epsilon guard)");
+        {
+            juce::AudioBuffer<float> silent (1, 20000);
+            silent.clear();
+            std::vector<NoiseProfile> profiles;
+            expect (engine.estimateProfile (silent, profiles).wasOk());
+
+            juce::AudioBuffer<float> out;
+            expect (engine.process (makeWhiteNoise (1, 10000, 0.1f, 27), profiles, 5.0f, out, {}, noCancel).wasOk());
+            expect (allFinite (out));
+            expect (rms (out) > 0.05);   // nothing to subtract, so the signal passes through
+        }
+    }
+};
+
+static RobustnessTests robustnessTests;
 
 int main()
 {

@@ -46,9 +46,15 @@ MainComponent::MainComponent()
     };
 
     statusLabel.setColour (juce::Label::textColourId, juce::Colour (0xff6e6e73));
-    statusLabel.setText (playback.getDeviceError().isEmpty() ? "No file loaded"
-                                                             : "Audio device unavailable: " + playback.getDeviceError(),
-                         juce::dontSendNotification);
+    refreshStatus();
+
+    if (playback.getDeviceError().isNotEmpty())   // plan §8: show it; processing and saving still work
+        juce::MessageManager::callAsync ([safeThis = juce::Component::SafePointer<MainComponent> (this)]
+        {
+            if (safeThis != nullptr)
+                safeThis->showError ("The audio output device could not be opened, so playback is unavailable "
+                                     "(processing and saving still work).\n\n" + safeThis->playback.getDeviceError());
+        });
 
     loadButton.onClick = [this] { chooseAndLoadFile(); };
     actions.saveButton.onClick = [this] { chooseAndSaveFile(); };
@@ -77,6 +83,8 @@ MainComponent::~MainComponent()
     cancelRequested = true;
     if (worker != nullptr)
         worker->stopThread (5000);
+    if (loader != nullptr)
+        loader->stopThread (10000);
 }
 
 void MainComponent::paint (juce::Graphics& g)
@@ -137,12 +145,14 @@ void MainComponent::timerCallback()
 void MainComponent::updateButtons()
 {
     const bool hasAudio = input.buffer.getNumSamples() > 0;
+    const bool busy = isProcessing || isLoading;
+    waveform.setInterceptsMouseClicks (! busy, ! busy);
     actions.playButton.setEnabled (hasAudio);
     actions.playButton.setButtonText (playback.isPlaying() ? "Stop" : "Play");
-    noiseProfileView.setLoadEnabled (hasAudio && ! isProcessing);
+    noiseProfileView.setLoadEnabled (hasAudio && ! busy);
 
     const bool canProcess = hasAudio && ! noiseProfiles.empty();
-    actions.processButton.setEnabled (isProcessing || canProcess);
+    actions.processButton.setEnabled (isProcessing || (canProcess && ! isLoading));
     actions.processButton.setTooltip (! hasAudio ? "Load an audio file first"
                               : noiseProfiles.empty() ? "Drag on the waveform to mark noise, or load a noise file"
                                                       : "");
@@ -153,11 +163,11 @@ void MainComponent::updateButtons()
     if (! isProcessing)
         actions.processButton.setButtonText ("Process");
 
-    processedButton.setEnabled (hasProcessed && ! isProcessing);
-    originalButton.setEnabled (hasAudio && ! isProcessing);
-    reductionPanel.alphaSlider.setEnabled (! isProcessing);
-    loadButton.setEnabled (! isProcessing);
-    actions.saveButton.setEnabled (hasAudio && ! isProcessing);
+    processedButton.setEnabled (hasProcessed && ! busy);
+    originalButton.setEnabled (hasAudio && ! busy);
+    reductionPanel.alphaSlider.setEnabled (! busy);
+    loadButton.setEnabled (! busy);
+    actions.saveButton.setEnabled (hasAudio && ! busy);
 }
 
 void MainComponent::showError (const juce::String& message)
@@ -179,35 +189,7 @@ void MainComponent::chooseAndLoadFile()
         if (file == juce::File())
             return;
 
-        AudioFileManager::LoadedAudio loaded;
-        const auto result = AudioFileManager::load (file, loaded);
-
-        if (result.failed())
-        {
-            showError (result.getErrorMessage());
-            return;
-        }
-
-        playback.stop();
-        input = std::move (loaded);
-        inputFile = file;
-        playback.setAudio (input.buffer, input.sampleRate);
-        waveform.setAudio (input.buffer, input.sampleRate);
-        originalSpectrogram.setAudio (input.buffer, input.sampleRate);
-        processedSpectrogram.clear();
-        clearNoiseProfile();
-        hasProcessed = processedSelected = false;
-        stale = true;
-        originalButton.setToggleState (true, juce::dontSendNotification);
-
-        statusLabel.setText (file.getFileName() + "  -  " + juce::String (input.sampleRate, 0) + " Hz, "
-                                 + juce::String (input.buffer.getNumChannels()) + " ch, "
-                                 + juce::String (input.buffer.getNumSamples() / input.sampleRate, 2) + " s",
-                             juce::dontSendNotification);
-        updateButtons();
-
-        if (input.numNonFiniteReplaced > 0)
-            showError (juce::String (input.numNonFiniteReplaced) + " invalid (NaN/Inf) samples were replaced with silence.");
+        startLoad (file, false);
     });
 }
 
@@ -273,32 +255,14 @@ void MainComponent::chooseAndLoadNoiseFile()
         if (file == juce::File())
             return;
 
-        AudioFileManager::LoadedAudio noise;
-        auto result = AudioFileManager::load (file, noise);
-
-        if (result.wasOk())
-            result = NoiseReductionEngine::checkSampleRates (input.sampleRate, noise.sampleRate);
-
-        if (result.wasOk())
-            result = engine.estimateProfile (noise.buffer, noiseProfiles);
-
-        if (result.failed())
-        {
-            showError (result.getErrorMessage());
-            return;
-        }
-
-        waveform.clearRegion();
-        showProfile ("File " + file.getFileName());
-
-        if (noise.numNonFiniteReplaced > 0)
-            showError (juce::String (noise.numNonFiniteReplaced) + " invalid (NaN/Inf) samples in the noise file were replaced with silence.");
+        startLoad (file, true);
     });
 }
 
 void MainComponent::markStale()
 {
     stale = true;
+    ++settingsVersion;
     updateButtons();
 }
 
@@ -323,9 +287,10 @@ void MainComponent::startProcessing()
 
     struct Outcome { juce::Result result = juce::Result::ok(); juce::AudioBuffer<float> audio; };
     auto outcome = std::make_shared<Outcome>();
+    const unsigned versionAtStart = settingsVersion;
 
     // The job only touches copies, so the UI stays free to change while it runs.
-    worker = std::make_unique<JobThread> ([this, outcome,
+    worker = std::make_unique<JobThread> ([this, outcome, versionAtStart,
                                            safeThis = juce::Component::SafePointer<MainComponent> (this),
                                            audioIn = input.buffer,
                                            profiles = noiseProfiles,
@@ -335,16 +300,16 @@ void MainComponent::startProcessing()
         outcome->result = jobEngine.process (audioIn, profiles, alpha, outcome->audio,
                                              [this] (float p) { progress = p; }, cancelRequested);
 
-        juce::MessageManager::callAsync ([safeThis, outcome]
+        juce::MessageManager::callAsync ([safeThis, outcome, versionAtStart]
         {
             if (safeThis != nullptr)
-                safeThis->finishProcessing (outcome->result, std::move (outcome->audio));
+                safeThis->finishProcessing (outcome->result, std::move (outcome->audio), versionAtStart);
         });
     });
     worker->startThread();
 }
 
-void MainComponent::finishProcessing (juce::Result result, juce::AudioBuffer<float> processedAudio)
+void MainComponent::finishProcessing (juce::Result result, juce::AudioBuffer<float> processedAudio, unsigned settingsAtStart)
 {
     if (worker != nullptr)
         worker->stopThread (5000);   // the job has finished; this just joins it
@@ -355,7 +320,7 @@ void MainComponent::finishProcessing (juce::Result result, juce::AudioBuffer<flo
     {
         processed = std::move (processedAudio);
         hasProcessed = true;
-        stale = false;
+        stale = settingsVersion != settingsAtStart;   // settings changed while it ran
         statusLabel.setText ("Processed with alpha = " + juce::String (reductionPanel.alphaSlider.getValue(), 2)
                                  + ". Use Original / Processed to compare.",
                              juce::dontSendNotification);
@@ -377,14 +342,17 @@ void MainComponent::finishProcessing (juce::Result result, juce::AudioBuffer<flo
 
 void MainComponent::saveCurrent (const juce::File& file, juce::AudioBuffer<float> audio)
 {
-    auto write = [this, file] (const juce::AudioBuffer<float>& toWrite)
+    auto write = [safeThis = juce::Component::SafePointer<MainComponent> (this), file] (const juce::AudioBuffer<float>& toWrite)
     {
-        const auto result = AudioFileManager::saveWav (file, toWrite, input.sampleRate);
+        if (safeThis == nullptr)
+            return;
+
+        const auto result = AudioFileManager::saveWav (file, toWrite, safeThis->input.sampleRate);
 
         if (result.failed())
-            showError (result.getErrorMessage());
+            safeThis->showError (result.getErrorMessage());
         else
-            statusLabel.setText ("Saved " + file.getFileName(), juce::dontSendNotification);
+            safeThis->statusLabel.setText ("Saved " + file.getFileName(), juce::dontSendNotification);
     };
 
     const float peak = AudioFileManager::getPeak (audio);
@@ -414,4 +382,97 @@ void MainComponent::saveCurrent (const juce::File& file, juce::AudioBuffer<float
             write (toSave);
         }
     });
+}
+
+void MainComponent::refreshStatus()
+{
+    if (input.buffer.getNumSamples() == 0)
+    {
+        statusLabel.setText ("No file loaded", juce::dontSendNotification);
+        return;
+    }
+
+    statusLabel.setText (inputFile.getFileName() + "  -  " + juce::String (input.sampleRate, 0) + " Hz, "
+                             + juce::String (input.buffer.getNumChannels()) + " ch, "
+                             + juce::String (input.buffer.getNumSamples() / input.sampleRate, 2) + " s",
+                         juce::dontSendNotification);
+}
+
+void MainComponent::startLoad (const juce::File& file, bool isNoiseFile)
+{
+    if (isLoading || isProcessing)
+        return;
+
+    isLoading = true;
+    statusLabel.setText ("Loading " + file.getFileName() + "...", juce::dontSendNotification);
+    updateButtons();
+
+    auto outcome = std::make_shared<LoadOutcome>();
+
+    // Decoding (and, for a noise file, the profile estimate) happens off the message thread (plan §7.1).
+    loader = std::make_unique<JobThread> ([outcome, file, isNoiseFile, inputRate = input.sampleRate,
+                                           safeThis = juce::Component::SafePointer<MainComponent> (this)]
+    {
+        outcome->result = AudioFileManager::load (file, outcome->audio);
+
+        if (isNoiseFile && outcome->result.wasOk())
+            outcome->result = NoiseReductionEngine::checkSampleRates (inputRate, outcome->audio.sampleRate);
+
+        if (isNoiseFile && outcome->result.wasOk())
+            outcome->result = NoiseReductionEngine().estimateProfile (outcome->audio.buffer, outcome->profiles);
+
+        juce::MessageManager::callAsync ([safeThis, outcome, file, isNoiseFile]
+        {
+            if (safeThis != nullptr)
+                safeThis->finishLoad (file, isNoiseFile, *outcome);
+        });
+    });
+    loader->startThread();
+}
+
+void MainComponent::finishLoad (const juce::File& file, bool isNoiseFile, LoadOutcome& outcome)
+{
+    if (loader != nullptr)
+        loader->stopThread (5000);   // the job has finished; this just joins it
+    loader.reset();
+    isLoading = false;
+
+    if (outcome.result.failed())
+    {
+        refreshStatus();
+        updateButtons();
+        showError (outcome.result.getErrorMessage());
+        return;
+    }
+
+    if (isNoiseFile)
+    {
+        noiseProfiles = std::move (outcome.profiles);
+        waveform.clearRegion();
+        showProfile ("File " + file.getFileName());
+        refreshStatus();
+
+        if (outcome.audio.numNonFiniteReplaced > 0)
+            showError (juce::String (outcome.audio.numNonFiniteReplaced)
+                       + " invalid (NaN/Inf) samples in the noise file were replaced with silence.");
+        return;
+    }
+
+    playback.stop();
+    input = std::move (outcome.audio);
+    inputFile = file;
+    playback.setAudio (input.buffer, input.sampleRate);
+    waveform.setAudio (input.buffer, input.sampleRate);
+    originalSpectrogram.setAudio (input.buffer, input.sampleRate);
+    processedSpectrogram.clear();
+    clearNoiseProfile();
+    hasProcessed = processedSelected = false;
+    stale = true;
+    ++settingsVersion;
+    originalButton.setToggleState (true, juce::dontSendNotification);
+    refreshStatus();
+    updateButtons();
+
+    if (input.numNonFiniteReplaced > 0)
+        showError (juce::String (input.numNonFiniteReplaced) + " invalid (NaN/Inf) samples were replaced with silence.");
 }

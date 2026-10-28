@@ -22,6 +22,13 @@ public:
 
 private:
     void timerCallback() override;
+    struct LoadOutcome
+    {
+        juce::Result result = juce::Result::ok();
+        AudioFileManager::LoadedAudio audio;
+        std::vector<NoiseProfile> profiles;   // noise files only
+    };
+
     void chooseAndLoadFile();
     void chooseAndSaveFile();
     void chooseAndLoadNoiseFile();
@@ -29,7 +36,10 @@ private:
     void clearNoiseProfile();
     void showProfile (const juce::String& description);
     void startProcessing();
-    void finishProcessing (juce::Result result, juce::AudioBuffer<float> processedAudio);
+    void finishProcessing (juce::Result result, juce::AudioBuffer<float> processedAudio, unsigned settingsAtStart);
+    void startLoad (const juce::File& file, bool isNoiseFile);
+    void finishLoad (const juce::File& file, bool isNoiseFile, LoadOutcome& outcome);
+    void refreshStatus();
     void markStale();
     void selectVersion (bool processed);
     void saveCurrent (const juce::File& file, juce::AudioBuffer<float> audio);
@@ -47,7 +57,9 @@ private:
     NoiseProfileView noiseProfileView;
     // Processing (plan §7.1): the job works on copies and reports back on the message thread.
     juce::AudioBuffer<float> processed;
-    bool hasProcessed = false, processedSelected = false, isProcessing = false, stale = true;
+    bool hasProcessed = false, processedSelected = false, isProcessing = false, isLoading = false, stale = true;
+    unsigned settingsVersion = 0;   // bumped whenever alpha or the noise profile changes
+    std::unique_ptr<juce::Thread> loader;
     std::atomic<float> progress { 0.0f };
     std::atomic<bool> cancelRequested { false };
     std::unique_ptr<juce::Thread> worker;
