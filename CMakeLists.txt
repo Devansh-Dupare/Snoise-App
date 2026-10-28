@@ -14,6 +14,7 @@ set(CORE_SOURCES
     Source/dsp/FrameProcessor.cpp
     Source/dsp/AudioReconstructor.cpp
     Source/dsp/NoiseProfile.cpp
+    Source/dsp/SpectralSubtractor.cpp
     Source/dsp/NoiseReductionEngine.cpp
     Source/io/AudioFileManager.cpp)
 

@@ -15,6 +15,8 @@ public:
 
     // Copies the audio, so the caller's buffer may change afterwards.
     void setAudio (const juce::AudioBuffer<float>& audio, double sampleRate);
+    // Swaps the audio but keeps the playback position and play state (A/B switching, plan §7.2).
+    void replaceAudio (const juce::AudioBuffer<float>& audio, double sampleRate);
     bool hasAudio() const { return memorySource != nullptr; }
 
     void play();

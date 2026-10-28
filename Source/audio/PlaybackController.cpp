@@ -41,3 +41,15 @@ void PlaybackController::stop()
 {
     transport.stop();
 }
+
+void PlaybackController::replaceAudio (const juce::AudioBuffer<float>& audio, double sampleRate)
+{
+    const bool wasPlaying = transport.isPlaying();
+    const double position = transport.getCurrentPosition();
+
+    setAudio (audio, sampleRate);
+    transport.setPosition (position);
+
+    if (wasPlaying)
+        transport.start();
+}

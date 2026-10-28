@@ -1,5 +1,19 @@
 #include "MainComponent.h"
 
+namespace
+{
+    // Runs a job on its own thread; the job reports back through MessageManager::callAsync.
+    class JobThread : public juce::Thread
+    {
+    public:
+        explicit JobThread (std::function<void()> j) : juce::Thread ("Noise reduction"), job (std::move (j)) {}
+        void run() override { job(); }
+
+    private:
+        std::function<void()> job;
+    };
+}
+
 MainComponent::MainComponent()
 {
     addAndMakeVisible (waveform);
@@ -8,6 +22,34 @@ MainComponent::MainComponent()
     addAndMakeVisible (playButton);
     addAndMakeVisible (saveButton);
     addAndMakeVisible (statusLabel);
+    addAndMakeVisible (processButton);
+    addAndMakeVisible (originalButton);
+    addAndMakeVisible (processedButton);
+    addAndMakeVisible (alphaSlider);
+    addAndMakeVisible (alphaLabel);
+
+    alphaSlider.setRange (0.0, 5.0, 0.05);
+    alphaSlider.setValue (1.8, juce::dontSendNotification);
+    alphaSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    alphaSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 24);
+    alphaSlider.onValueChange = [this] { markStale(); };
+    alphaLabel.setText ("Noise reduction (alpha)", juce::dontSendNotification);
+    alphaLabel.setColour (juce::Label::textColourId, juce::Colour (0xff1d1d1f));
+
+    originalButton.setRadioGroupId (1);
+    processedButton.setRadioGroupId (1);
+    originalButton.setClickingTogglesState (true);
+    processedButton.setClickingTogglesState (true);
+    originalButton.setToggleState (true, juce::dontSendNotification);
+    originalButton.onClick = [this] { selectVersion (false); };
+    processedButton.onClick = [this] { selectVersion (true); };
+    processButton.onClick = [this]
+    {
+        if (isProcessing)
+            cancelRequested = true;
+        else
+            startProcessing();
+    };
 
     statusLabel.setColour (juce::Label::textColourId, juce::Colour (0xff6e6e73));
     statusLabel.setText (playback.getDeviceError().isEmpty() ? "No file loaded"
@@ -38,6 +80,9 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     stopTimer();
+    cancelRequested = true;
+    if (worker != nullptr)
+        worker->stopThread (5000);
 }
 
 void MainComponent::paint (juce::Graphics& g)
@@ -54,18 +99,31 @@ void MainComponent::resized()
     playButton.setBounds (bar.removeFromLeft (100));
     bar.removeFromLeft (12);
     saveButton.setBounds (bar.removeFromLeft (130));
+    bar.removeFromLeft (12);
+    processButton.setBounds (bar.removeFromLeft (150));
+    bar.removeFromLeft (12);
+    originalButton.setBounds (bar.removeFromLeft (90));
+    processedButton.setBounds (bar.removeFromLeft (90));
     bar.removeFromLeft (16);
     statusLabel.setBounds (bar);
 
     area.removeFromTop (16);
     waveform.setBounds (area.removeFromTop (220));
     area.removeFromTop (16);
-    noiseProfileView.setBounds (area.removeFromTop (260).removeFromLeft (560));
+    auto lower = area.removeFromTop (260);
+    noiseProfileView.setBounds (lower.removeFromLeft (560));
+    lower.removeFromLeft (16);
+    auto alphaArea = lower.removeFromLeft (420).removeFromTop (70);
+    alphaLabel.setBounds (alphaArea.removeFromTop (28));
+    alphaSlider.setBounds (alphaArea);
 }
 
 void MainComponent::timerCallback()
 {
     waveform.setPlayheadSeconds (playback.getPositionSeconds());
+
+    if (isProcessing)
+        processButton.setButtonText ("Cancel  " + juce::String (juce::roundToInt (progress.load() * 100.0f)) + "%");
 
     const bool playing = playback.isPlaying();
     if ((playButton.getButtonText() == "Stop") != playing)
@@ -76,9 +134,24 @@ void MainComponent::updateButtons()
 {
     const bool hasAudio = input.buffer.getNumSamples() > 0;
     playButton.setEnabled (hasAudio);
-    saveButton.setEnabled (hasAudio);
     playButton.setButtonText (playback.isPlaying() ? "Stop" : "Play");
-    noiseProfileView.setLoadEnabled (hasAudio);
+    noiseProfileView.setLoadEnabled (hasAudio && ! isProcessing);
+
+    const bool canProcess = hasAudio && ! noiseProfiles.empty();
+    processButton.setEnabled (isProcessing || canProcess);
+    processButton.setTooltip (! hasAudio ? "Load an audio file first"
+                              : noiseProfiles.empty() ? "Drag on the waveform to mark noise, or load a noise file"
+                                                      : "");
+    processButton.setColour (juce::TextButton::buttonColourId,
+                             stale && canProcess && ! isProcessing ? juce::Colour (0xfffc8961) : juce::Colour (0xff6e6e73));
+    if (! isProcessing)
+        processButton.setButtonText ("Process");
+
+    processedButton.setEnabled (hasProcessed && ! isProcessing);
+    originalButton.setEnabled (hasAudio && ! isProcessing);
+    alphaSlider.setEnabled (! isProcessing);
+    loadButton.setEnabled (! isProcessing);
+    saveButton.setEnabled (hasAudio && ! isProcessing);
 }
 
 void MainComponent::showError (const juce::String& message)
@@ -115,6 +188,9 @@ void MainComponent::chooseAndLoadFile()
         playback.setAudio (input.buffer, input.sampleRate);
         waveform.setAudio (input.buffer, input.sampleRate);
         clearNoiseProfile();
+        hasProcessed = processedSelected = false;
+        stale = true;
+        originalButton.setToggleState (true, juce::dontSendNotification);
 
         statusLabel.setText (file.getFileName() + "  -  " + juce::String (input.sampleRate, 0) + " Hz, "
                                  + juce::String (input.buffer.getNumChannels()) + " ch, "
@@ -139,12 +215,7 @@ void MainComponent::chooseAndSaveFile()
         if (file == juce::File())
             return;
 
-        const auto result = AudioFileManager::saveWav (file.withFileExtension ("wav"), input.buffer, input.sampleRate);
-
-        if (result.failed())
-            showError (result.getErrorMessage());
-        else
-            statusLabel.setText ("Saved " + file.withFileExtension ("wav").getFileName(), juce::dontSendNotification);
+        saveCurrent (file.withFileExtension ("wav"), processedSelected ? processed : input.buffer);
     });
 }
 
@@ -153,12 +224,14 @@ void MainComponent::clearNoiseProfile()
     noiseProfiles.clear();
     noiseProfileView.clearProfile();
     waveform.clearRegion();
+    updateButtons();
 }
 
 void MainComponent::showProfile (const juce::String& description)
 {
     noiseProfileView.setProfile (noiseProfiles[0].getAverageMagnitude(), input.sampleRate,
                                  description + " (" + juce::String (noiseProfiles[0].getFrameCount()) + " frames)");
+    markStale();
 }
 
 void MainComponent::useNoiseRegion (double startSeconds, double endSeconds)
@@ -212,5 +285,124 @@ void MainComponent::chooseAndLoadNoiseFile()
 
         if (noise.numNonFiniteReplaced > 0)
             showError (juce::String (noise.numNonFiniteReplaced) + " invalid (NaN/Inf) samples in the noise file were replaced with silence.");
+    });
+}
+
+void MainComponent::markStale()
+{
+    stale = true;
+    updateButtons();
+}
+
+void MainComponent::selectVersion (bool useProcessed)
+{
+    processedSelected = useProcessed && hasProcessed;
+    const auto& audio = processedSelected ? processed : input.buffer;
+    playback.replaceAudio (audio, input.sampleRate);
+}
+
+void MainComponent::startProcessing()
+{
+    if (isProcessing || input.buffer.getNumSamples() == 0 || noiseProfiles.empty())
+        return;
+
+    isProcessing = true;
+    cancelRequested = false;
+    progress = 0.0f;
+    playback.stop();
+    statusLabel.setText ("Processing...", juce::dontSendNotification);
+    updateButtons();
+
+    struct Outcome { juce::Result result = juce::Result::ok(); juce::AudioBuffer<float> audio; };
+    auto outcome = std::make_shared<Outcome>();
+
+    // The job only touches copies, so the UI stays free to change while it runs.
+    worker = std::make_unique<JobThread> ([this, outcome,
+                                           safeThis = juce::Component::SafePointer<MainComponent> (this),
+                                           audioIn = input.buffer,
+                                           profiles = noiseProfiles,
+                                           alpha = static_cast<float> (alphaSlider.getValue())]
+    {
+        const NoiseReductionEngine jobEngine;
+        outcome->result = jobEngine.process (audioIn, profiles, alpha, outcome->audio,
+                                             [this] (float p) { progress = p; }, cancelRequested);
+
+        juce::MessageManager::callAsync ([safeThis, outcome]
+        {
+            if (safeThis != nullptr)
+                safeThis->finishProcessing (outcome->result, std::move (outcome->audio));
+        });
+    });
+    worker->startThread();
+}
+
+void MainComponent::finishProcessing (juce::Result result, juce::AudioBuffer<float> processedAudio)
+{
+    if (worker != nullptr)
+        worker->stopThread (5000);   // the job has finished; this just joins it
+    worker.reset();
+    isProcessing = false;
+
+    if (result.wasOk())
+    {
+        processed = std::move (processedAudio);
+        hasProcessed = true;
+        stale = false;
+        statusLabel.setText ("Processed with alpha = " + juce::String (alphaSlider.getValue(), 2)
+                                 + ". Use Original / Processed to compare.",
+                             juce::dontSendNotification);
+        processedButton.setToggleState (true, juce::dontSendNotification);
+        processedSelected = true;
+        playback.replaceAudio (processed, input.sampleRate);
+    }
+    else
+    {
+        statusLabel.setText (cancelRequested ? "Processing cancelled" : "Processing failed", juce::dontSendNotification);
+
+        if (! cancelRequested)
+            showError (result.getErrorMessage());
+    }
+
+    updateButtons();
+}
+
+void MainComponent::saveCurrent (const juce::File& file, juce::AudioBuffer<float> audio)
+{
+    auto write = [this, file] (const juce::AudioBuffer<float>& toWrite)
+    {
+        const auto result = AudioFileManager::saveWav (file, toWrite, input.sampleRate);
+
+        if (result.failed())
+            showError (result.getErrorMessage());
+        else
+            statusLabel.setText ("Saved " + file.getFileName(), juce::dontSendNotification);
+    };
+
+    const float peak = AudioFileManager::getPeak (audio);
+
+    if (peak <= 1.0f)
+    {
+        write (audio);
+        return;
+    }
+
+    // Overlap-add of modified frames can overshoot full scale slightly (plan §7.3).
+    const auto options = juce::MessageBoxOptions::makeOptionsYesNoCancel (
+        juce::MessageBoxIconType::WarningIcon, "Spectral Noise Cancellation",
+        "The audio peaks at " + juce::String (20.0f * std::log10 (peak), 1) + " dBFS, above full scale, and will clip.\n\n"
+        "Normalise it to -0.1 dBFS before saving?",
+        "Normalise", "Save as is", "Cancel");
+
+    juce::AlertWindow::showAsync (options, [write, toSave = std::move (audio), peak] (int choice) mutable
+    {
+        if (choice == 1)
+        {
+            toSave.applyGain (0.9886f / peak);   // -0.1 dBFS
+            write (toSave);
+        }
+        else if (choice == 2)
+        {
+            write (toSave);
+        }
     });
 }

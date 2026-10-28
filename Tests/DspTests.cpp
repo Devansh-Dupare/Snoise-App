@@ -6,6 +6,7 @@
 #include "dsp/AudioReconstructor.h"
 #include "dsp/NoiseProfile.h"
 #include "dsp/NoiseReductionEngine.h"
+#include "dsp/SpectralSubtractor.h"
 #include "io/AudioFileManager.h"
 #include <random>
 
@@ -326,6 +327,201 @@ struct NoiseSelectionTests : public juce::UnitTest
 };
 
 static NoiseSelectionTests noiseSelectionTests;
+
+// ---- Phase 4: spectral subtraction (plan §10.1 tests 5-7) ----
+static juce::AudioBuffer<float> makeWhiteNoise (int channels, int length, float sigma, unsigned seed)
+{
+    std::mt19937 rng (seed);
+    std::normal_distribution<float> dist (0.0f, sigma);
+    juce::AudioBuffer<float> b (channels, length);
+    for (int ch = 0; ch < channels; ++ch)
+        for (int i = 0; i < length; ++i)
+            b.setSample (ch, i, dist (rng));
+    return b;
+}
+
+static double rms (const juce::AudioBuffer<float>& b, int channel = 0)
+{
+    double sum = 0.0;
+    for (int i = 0; i < b.getNumSamples(); ++i)
+        sum += static_cast<double> (b.getSample (channel, i)) * b.getSample (channel, i);
+    return std::sqrt (sum / juce::jmax (1, b.getNumSamples()));
+}
+
+static bool allFinite (const juce::AudioBuffer<float>& b)
+{
+    for (int ch = 0; ch < b.getNumChannels(); ++ch)
+        for (int i = 0; i < b.getNumSamples(); ++i)
+            if (! std::isfinite (b.getSample (ch, i)))
+                return false;
+    return true;
+}
+
+struct SpectralSubtractionTests : public juce::UnitTest
+{
+    SpectralSubtractionTests() : juce::UnitTest ("Spectral subtraction", "SNC") {}
+
+    juce::Result run (const NoiseReductionEngine& engine, const juce::AudioBuffer<float>& in,
+                      const std::vector<NoiseProfile>& profiles, float alpha, juce::AudioBuffer<float>& out)
+    {
+        const std::atomic<bool> noCancel { false };
+        return engine.process (in, profiles, alpha, out, {}, noCancel);
+    }
+
+    void runTest() override
+    {
+        const StftConfig config;
+        const NoiseReductionEngine engine (config);
+
+        beginTest ("subtractor formula: gain, clamping and phase preservation");
+        {
+            NoiseProfile profile;
+            profile.reset (config.numBins());
+            std::vector<float> frame (static_cast<size_t> (2 * config.fftSize()), 0.0f);
+            // bin 0: |X| = 5, noise 2 -> alpha 1 leaves 3; bin 1: |X| = 1, noise 2 -> clamped to 0
+            frame[0] = 3.0f; frame[1] = 4.0f;
+            frame[2] = 1.0f; frame[3] = 0.0f;
+            std::vector<float> noiseFrame (frame.size(), 0.0f);
+            noiseFrame[0] = 2.0f;
+            noiseFrame[2] = 2.0f;
+            profile.addFrame (noiseFrame.data());
+            profile.finalise();
+
+            SpectralSubtractor sub;
+            sub.setAlpha (1.0f);
+            sub.process (frame.data(), profile, config.numBins());
+            expectWithinAbsoluteError (frame[0], 1.8f, 1.0e-5f);   // 3 * (3/5)
+            expectWithinAbsoluteError (frame[1], 2.4f, 1.0e-5f);   // 4 * (3/5): same phase as before
+            expectEquals (frame[2], 0.0f);
+            sub.setAlpha (100.0f);
+            expectEquals (sub.getAlpha(), SpectralSubtractor::maxAlpha);
+            sub.setAlpha (-1.0f);
+            expectEquals (sub.getAlpha(), 0.0f);
+        }
+
+        beginTest ("alpha = 0 through the engine reproduces the input (mono and stereo)");
+        {
+            auto input = makeWhiteNoise (2, 30000, 0.1f, 3);
+            std::vector<NoiseProfile> profiles;
+            expect (engine.estimateProfile (makeWhiteNoise (1, 20000, 0.05f, 4), profiles).wasOk());
+
+            juce::AudioBuffer<float> out;
+            expect (run (engine, input, profiles, 0.0f, out).wasOk());
+            expectEquals (out.getNumChannels(), 2);
+            expectEquals (out.getNumSamples(), 30000);
+
+            float worst = 0.0f;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < 30000; ++i)
+                    worst = std::max (worst, std::abs (out.getSample (ch, i) - input.getSample (ch, i)));
+            expect (worst < 1.0e-4f);
+        }
+
+        beginTest ("test 5: subtracting a noise-only signal with alpha = 1 drops its RMS by at least 8 dB");
+        {
+            const auto noise = makeWhiteNoise (1, 88200, 0.1f, 5);
+            std::vector<NoiseProfile> profiles;
+            expect (engine.estimateProfile (noise, profiles).wasOk());
+
+            juce::AudioBuffer<float> out;
+            expect (run (engine, noise, profiles, 1.0f, out).wasOk());
+            const double dropDb = 20.0 * std::log10 (rms (out) / rms (noise));
+            logMessage ("noise-only RMS change at alpha 1: " + juce::String (dropDb, 2) + " dB");
+            // Bin magnitudes of white noise are Rayleigh distributed, so subtracting only their mean leaves
+            // E[(R - mean)+^2] / E[R^2] ~ 12.6% of the energy: about -9 dB in theory, not -10.
+            expect (dropDb < -8.0);
+        }
+
+        beginTest ("test 6: SNR improves for a 1 kHz sine in white noise");
+        {
+            const double fs = 44100.0;
+            const int length = 88200;
+            juce::AudioBuffer<float> clean (1, length);
+            for (int i = 0; i < length; ++i)
+                clean.setSample (0, i, 0.3f * static_cast<float> (std::sin (2.0 * juce::MathConstants<double>::pi * 1000.0 * i / fs)));
+
+            auto noise = makeWhiteNoise (1, length, 0.1f, 6);
+            juce::AudioBuffer<float> noisy (clean);
+            noisy.addFrom (0, 0, noise, 0, 0, length);
+
+            std::vector<NoiseProfile> profiles;   // profile from independent noise of the same level
+            expect (engine.estimateProfile (makeWhiteNoise (1, 44100, 0.1f, 99), profiles).wasOk());
+
+            juce::AudioBuffer<float> out;
+            expect (run (engine, noisy, profiles, 1.8f, out).wasOk());
+
+            juce::AudioBuffer<float> residualBefore (noisy), residualAfter (out);
+            residualBefore.addFrom (0, 0, clean, 0, 0, length, -1.0f);
+            residualAfter.addFrom (0, 0, clean, 0, 0, length, -1.0f);
+            const double snrBefore = 20.0 * std::log10 (rms (clean) / rms (residualBefore));
+            const double snrAfter = 20.0 * std::log10 (rms (clean) / rms (residualAfter));
+            logMessage ("SNR before " + juce::String (snrBefore, 2) + " dB, after " + juce::String (snrAfter, 2) + " dB");
+            expect (snrAfter > snrBefore + 3.0);
+        }
+
+        beginTest ("test 7: edge cases (short, silent, stereo, NaN input)");
+        {
+            std::vector<NoiseProfile> mono, stereo;
+            expect (engine.estimateProfile (makeWhiteNoise (1, 20000, 0.1f, 8), mono).wasOk());
+            expect (engine.estimateProfile (makeWhiteNoise (2, 20000, 0.1f, 9), stereo).wasOk());
+
+            juce::AudioBuffer<float> out;
+
+            auto shortInput = makeWhiteNoise (1, 100, 0.1f, 10);        // shorter than N
+            expect (run (engine, shortInput, mono, 1.8f, out).wasOk());
+            expectEquals (out.getNumSamples(), 100);
+            expect (allFinite (out));
+
+            juce::AudioBuffer<float> one (1, 1);
+            one.clear();
+            expect (run (engine, one, mono, 1.8f, out).wasOk());
+            expectEquals (out.getNumSamples(), 1);
+
+            juce::AudioBuffer<float> silent (1, 10000);
+            silent.clear();
+            expect (run (engine, silent, mono, 5.0f, out).wasOk());
+            expect (allFinite (out));
+            expectEquals (out.getMagnitude (0, 10000), 0.0f);
+
+            const auto stereoInput = makeWhiteNoise (2, 15000, 0.1f, 11);
+            expect (run (engine, stereoInput, stereo, 1.8f, out).wasOk());   // per-channel profiles
+            expectEquals (out.getNumChannels(), 2);
+            expect (allFinite (out));
+            expect (run (engine, stereoInput, mono, 1.8f, out).wasOk());     // channel 0's profile reused
+            expect (allFinite (out));
+
+            auto bad = makeWhiteNoise (1, 8000, 0.1f, 12);
+            bad.setSample (0, 100, std::numeric_limits<float>::quiet_NaN());
+            bad.setSample (0, 200, std::numeric_limits<float>::infinity());
+            expect (run (engine, bad, mono, 1.8f, out).wasOk());
+            expect (allFinite (out));
+        }
+
+        beginTest ("invalid arguments and cancellation are reported");
+        {
+            std::vector<NoiseProfile> none, notReady (1);
+            notReady[0].reset (config.numBins());   // M = 0
+            const auto input = makeWhiteNoise (1, 5000, 0.1f, 13);
+            juce::AudioBuffer<float> out;
+            expect (run (engine, input, none, 1.0f, out).failed());
+            expect (run (engine, input, notReady, 1.0f, out).failed());
+
+            std::vector<NoiseProfile> profiles;
+            expect (engine.estimateProfile (makeWhiteNoise (1, 8000, 0.1f, 14), profiles).wasOk());
+            expect (run (engine, juce::AudioBuffer<float> (1, 0), profiles, 1.0f, out).failed());
+
+            const std::atomic<bool> cancelled { true };
+            expect (engine.process (input, profiles, 1.0f, out, {}, cancelled).failed());
+
+            float lastProgress = 0.0f;
+            const std::atomic<bool> noCancel { false };
+            expect (engine.process (input, profiles, 1.0f, out, [&] (float p) { lastProgress = p; }, noCancel).wasOk());
+            expectWithinAbsoluteError (lastProgress, 1.0f, 1.0e-6f);
+        }
+    }
+};
+
+static SpectralSubtractionTests spectralSubtractionTests;
 
 int main()
 {

@@ -410,7 +410,7 @@ Spectrogram image is computed on the background thread after processing, then ha
 2. **STFT identity**: α = 0 → G ≈ 1 → full pipeline output ≈ input (max error < 1e-4). *This single test proves framing, windowing, OLA and normalisation are correct.*
 3. **Window normalisation**: Σwₐwₛ is constant (1.5) across the unpadded region.
 4. **Noise profile**: white noise of known RMS gives a flat D̄v(k) within tolerance; M equals the expected frame count.
-5. **Subtraction on noise only**: α = 1 on the same noise → output RMS drops by at least 10 dB.
+5. **Subtraction on noise only**: α = 1 on the same noise → output RMS drops by at least 8 dB (Rayleigh-distributed bin magnitudes leave ≈ 12.6 % of the energy at α = 1, i.e. ≈ −9 dB in theory; measured −9.9 dB).
 6. **SNR improvement**: 1 kHz sine + white noise; SNR after processing is higher than before.
 7. **Edge cases**: input shorter than N, silent input (all zeros → no NaN), stereo input.
 8. **Error paths**: noise region/file shorter than N is rejected (M = 0); noise file with a different sample rate is rejected; NaN/Inf input is sanitised.
