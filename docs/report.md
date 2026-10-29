@@ -121,8 +121,11 @@ validates framing, windowing, overlap-add and normalisation together.
 | `AudioReconstructor` | Inverse FFT, scale check, ws, overlap-add, Σwa·ws normalisation | `dsp::FFT`, `AudioBuffer` |
 | `NoiseReductionEngine` | Runs the pipeline per channel; progress and cancel; profile estimation | `std::atomic<bool>`, `AudioBuffer` |
 | `Spectrogram` | dB magnitude spectrogram for display only | none |
+| `AppSettings` | Saves key bindings, recent files and the last alpha | `ApplicationProperties`, `KeyPressMappingSet` |
+| `MainMenuModel` | Builds the File, Edit, View, Process, Playback and Help menus from command IDs | `MenuBarModel` |
+| `ViewState` | Visible time range shared by the waveform and both spectrograms | `ChangeBroadcaster`, `Range` |
 | `PlaybackController` | Audio device, transport, Original/Processed switching with position kept | `AudioDeviceManager`, `AudioSourcePlayer`, `AudioTransportSource`, `MemoryAudioSource` |
-| `MainComponent` and `ui/*` | Layout, controls, views, background jobs | `Component`, `Slider`, `TextButton`, `AudioThumbnail`, `Thread`, `ThreadPool` |
+| `MainComponent` and `ui/*` | Command target, layout, controls, views, background jobs | `Component`, `Slider`, `TextButton`, `AudioThumbnail`, `Thread`, `ThreadPool` |
 
 Everything under `Source/dsp` and `Source/io` has no GUI dependency and is compiled into both the app and
 the `SNC_Tests` console target. The UI never calls the DSP classes directly on the message thread for
@@ -140,6 +143,37 @@ threads and report back with `MessageManager::callAsync` through a `Component::S
 | 4.5 | Re{Y} = G Re{X}, Im{Y} = G Im{X} | `SpectralSubtractor::process` |
 | 4.6 | z = IFFT{Y}; numerator += ws z; denominator += wa ws; y = num/den | `AudioReconstructor::addFrame` / `finalise` |
 
+### 6.1 Application architecture and shortcuts
+
+Every user action exists once, as a command (`Commands.h`). Menu items, keyboard shortcuts and on-screen
+buttons are three ways of invoking the same command:
+
+```
+menu item ──┐
+key press ──┼──► ApplicationCommandManager ──► MainComponent::perform() ──► load / process / export / playback
+button ─────┘
+```
+
+`MainComponent::getCommandInfo` defines each command's name, default key and enabled or ticked state in one
+place, so the menu, the shortcut and the button always agree (for example, Export is disabled until the
+processed audio matches the alpha shown on screen). Key bindings can be edited with `KeyMappingEditorComponent`
+and are saved by `AppSettings`.
+
+**UI and processing are separate.** The UI changes did not modify any class under `Source/dsp`, and the
+`SNC_Tests` suite still runs against them. I did not run a sample-by-sample comparison of exported audio from
+before and after the UI change, so identical output is argued from the unchanged DSP code, not measured.
+
+**Parameter handling.** Alpha is one slider value. The knob, the `]` / `[` shortcuts (0.1 steps, 0.01 with
+Shift) and reset all change that value. Changing it marks the processed audio stale, which disables Export
+until the next Process.
+
+**Timeline.** The waveform and both spectrograms read one `ViewState`, so zooming and scrolling keep them
+aligned. A spectrogram column for STFT frame m is drawn centred at (mH + N/2)/fs, matching the frame
+definition in section 2, so transients in the waveform line up with their onset in the spectrogram. The noise
+selection is stored in seconds, so it stays attached to the same audio at any zoom level.
+
+**Shortcuts.** The default key bindings are in the table in `README.md`.
+
 ## 7. Parameter settings
 
 | Setting | Value | Notes |
@@ -149,7 +183,7 @@ threads and report back with `MessageManager::callAsync` through a `Component::S
 | Hop size H | 512 | 75 % overlap, 11.6 ms |
 | Analysis and synthesis window | periodic Hann | computed manually |
 | Bins | N/2 + 1 = 1025 | 21.5 Hz spacing at 44.1 kHz |
-| α | default 1.0, range 0 to 5, step 0.05 | double-click the knob to reset |
+| α | default 1.0, range 0 to 5, step 0.01 | double-click the knob, or press `\\`, to reset |
 | ε | 1e-10 | |
 
 Audio is processed offline as 32-bit float. Input samples that are NaN or Inf are replaced by 0 when a file
