@@ -1,4 +1,5 @@
 #include "WaveformView.h"
+#include "TimelineGestures.h"
 
 namespace
 {
@@ -6,10 +7,16 @@ namespace
                        waveformColour (0xff2d1b3d), accentColour (0xfffc8961);
 }
 
-WaveformView::WaveformView()
-    : thumbnail (512, formats, thumbnailCache)
+WaveformView::WaveformView (ViewState& vs)
+    : viewState (vs), thumbnail (512, formats, thumbnailCache)
 {
     formats.registerBasicFormats();
+    viewState.addChangeListener (this);
+}
+
+WaveformView::~WaveformView()
+{
+    viewState.removeChangeListener (this);
 }
 
 void WaveformView::setAudio (const juce::AudioBuffer<float>& audio, double sampleRate)
@@ -49,19 +56,15 @@ juce::Rectangle<int> WaveformView::getPlotBounds() const
     return getLocalBounds().reduced (12);
 }
 
-double WaveformView::secondsAtX (int x) const
+double WaveformView::secondsAtX (float x) const
 {
-    const auto plot = getPlotBounds();
-    const double fraction = juce::jlimit (0.0, 1.0, (x - plot.getX()) / static_cast<double> (juce::jmax (1, plot.getWidth())));
-    return fraction * thumbnail.getTotalLength();
+    const auto plot = getPlotBounds().toFloat();
+    return juce::jlimit (0.0, thumbnail.getTotalLength(), viewState.xToTime (x, plot));
 }
 
 float WaveformView::xAtSeconds (double seconds) const
 {
-    const auto plot = getPlotBounds();
-    const double total = thumbnail.getTotalLength();
-    const auto fraction = static_cast<float> (total > 0.0 ? seconds / total : 0.0);
-    return static_cast<float> (plot.getX()) + fraction * static_cast<float> (plot.getWidth());
+    return viewState.timeToX (seconds, getPlotBounds().toFloat());
 }
 
 void WaveformView::paint (juce::Graphics& g)
@@ -82,8 +85,11 @@ void WaveformView::paint (juce::Graphics& g)
         return;
     }
 
+    const auto visible = viewState.getVisibleRange();
+    g.saveState();
+    g.reduceClipRegion (plot);
     g.setColour (waveformColour);
-    thumbnail.drawChannels (g, plot, 0.0, thumbnail.getTotalLength(), 1.0f);
+    thumbnail.drawChannels (g, plot, visible.getStart(), visible.getEnd(), 1.0f);
 
     if (hasRegion)
     {
@@ -97,15 +103,30 @@ void WaveformView::paint (juce::Graphics& g)
                     juce::Justification::centredLeft);
     }
 
-    const float x = xAtSeconds (playheadSeconds);
-    g.setColour (accentColour);
-    g.drawLine (x, static_cast<float> (plot.getY()), x, static_cast<float> (plot.getBottom()), 2.0f);
+    if (visible.contains (playheadSeconds))
+    {
+        const float x = xAtSeconds (playheadSeconds);
+        g.setColour (accentColour);
+        g.drawLine (x, static_cast<float> (plot.getY()), x, static_cast<float> (plot.getBottom()), 2.0f);
+    }
+
+    g.restoreState();
+}
+
+void WaveformView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    handleTimelineWheel (viewState, e, w, getPlotBounds().toFloat());
+}
+
+void WaveformView::mouseMagnify (const juce::MouseEvent& e, float scaleFactor)
+{
+    handleTimelineMagnify (viewState, e, scaleFactor, getPlotBounds().toFloat());
 }
 
 void WaveformView::mouseDown (const juce::MouseEvent& e)
 {
     dragging = false;
-    dragAnchorSeconds = secondsAtX (e.x);
+    dragAnchorSeconds = secondsAtX (e.position.x);
 }
 
 void WaveformView::mouseDrag (const juce::MouseEvent& e)
@@ -117,7 +138,7 @@ void WaveformView::mouseDrag (const juce::MouseEvent& e)
         return;
 
     dragging = true;
-    setRegion (dragAnchorSeconds, secondsAtX (e.x));
+    setRegion (dragAnchorSeconds, secondsAtX (e.position.x));
 }
 
 void WaveformView::mouseUp (const juce::MouseEvent& e)
@@ -134,6 +155,6 @@ void WaveformView::mouseUp (const juce::MouseEvent& e)
     }
     else if (onSeek)
     {
-        onSeek (secondsAtX (e.x));
+        onSeek (secondsAtX (e.position.x));
     }
 }

@@ -2,13 +2,13 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
-// Card with Process (filled), Play and Save (outlined) (plan §9).
+// Card with Process (filled) and Play (outlined) (plan §9).
 class ActionsPanel : public juce::Component
 {
 public:
     ActionsPanel();
 
-    juce::TextButton processButton { "Process" }, playButton { "Play" }, saveButton { "Save WAV" };
+    juce::TextButton processButton { "Process" }, playButton { "Play" };
 
     void paint (juce::Graphics&) override;
     void resized() override;

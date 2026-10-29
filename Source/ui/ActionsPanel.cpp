@@ -5,7 +5,6 @@ ActionsPanel::ActionsPanel()
 {
     addAndMakeVisible (processButton);
     addAndMakeVisible (playButton);
-    addAndMakeVisible (saveButton);
 }
 
 void ActionsPanel::paint (juce::Graphics& g)
@@ -24,11 +23,9 @@ void ActionsPanel::paint (juce::Graphics& g)
 void ActionsPanel::resized()
 {
     auto area = getLocalBounds().reduced (12).withTrimmedTop (34);
-    const int rowHeight = juce::jmin (44, (area.getHeight() - 20) / 3);
+    const int rowHeight = juce::jmin (44, (area.getHeight() - 10) / 2);
 
     processButton.setBounds (area.removeFromTop (rowHeight));
     area.removeFromTop (10);
     playButton.setBounds (area.removeFromTop (rowHeight));
-    area.removeFromTop (10);
-    saveButton.setBounds (area.removeFromTop (rowHeight));
 }

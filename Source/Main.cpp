@@ -20,7 +20,13 @@ public:
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
     }
 
-    void systemRequestedQuit() override                 { quit(); }
+    void systemRequestedQuit() override
+    {
+        if (auto* mc = window != nullptr ? dynamic_cast<MainComponent*> (window->getContentComponent()) : nullptr)
+            mc->confirmDiscardIfNeeded ([] { juce::JUCEApplication::quit(); });
+        else
+            quit();
+    }
 
 private:
     class MainWindow : public juce::DocumentWindow
@@ -30,11 +36,22 @@ private:
             : DocumentWindow (name, juce::Colour (0xfff5f5f7), DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
-            setContentOwned (new MainComponent(), true);
+            auto* content = new MainComponent();
+            setContentOwned (content, true);
+           #if ! JUCE_MAC
+            setMenuBar (&content->getMenuModel());
+           #endif
             setResizable (true, true);
             setResizeLimits (1000, 650, 4000, 3000);
             centreWithSize (1440, 900);
             setVisible (true);
+        }
+
+        ~MainWindow() override
+        {
+           #if ! JUCE_MAC
+            setMenuBar (nullptr);
+           #endif
         }
 
         void closeButtonPressed() override { juce::JUCEApplication::getInstance()->systemRequestedQuit(); }

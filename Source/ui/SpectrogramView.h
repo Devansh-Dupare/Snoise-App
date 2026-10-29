@@ -3,14 +3,15 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <atomic>
+#include "ViewState.h"
 #include <memory>
 
 // Card showing an STFT spectrogram (Magma colours, -90..0 dB). The image is computed on a background
 // thread; setAudio returns immediately.
-class SpectrogramView : public juce::Component
+class SpectrogramView : public juce::Component, private juce::ChangeListener
 {
 public:
-    SpectrogramView (juce::String title, juce::String placeholder);
+    SpectrogramView (ViewState& viewState, juce::String title, juce::String placeholder);
     ~SpectrogramView() override;
 
     void setAudio (const juce::AudioBuffer<float>& audio, double sampleRate);
@@ -18,9 +19,15 @@ public:
     void setPlayheadSeconds (double seconds);
 
     void paint (juce::Graphics&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    void mouseMagnify (const juce::MouseEvent&, float) override;
 
 private:
+    void changeListenerCallback (juce::ChangeBroadcaster*) override { repaint(); }
     juce::Rectangle<int> getPlotBounds() const;
+
+    ViewState& viewState;
+    int frameStride = 1;   // STFT frames skipped per image column (long files are decimated)
 
     juce::String title, placeholder;
     juce::Image image;

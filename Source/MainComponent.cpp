@@ -17,9 +17,21 @@ namespace
 
 MainComponent::MainComponent()
 {
+    recentFiles.setMaxNumberOfItems (MenuItemRanges::recentFilesMax);
+    settings.restoreRecentFiles (recentFiles);
+
+    commandManager.registerAllCommandsForTarget (this);
+    commandManager.registerAllCommandsForTarget (juce::JUCEApplication::getInstance());   // quit
+    commandManager.setFirstCommandTarget (this);
+    settings.restoreKeyMappings (*commandManager.getKeyMappings());   // after registration, so defaults exist
+    commandManager.getKeyMappings()->addChangeListener (this);
+    viewState.addChangeListener (this);
+    addKeyListener (commandManager.getKeyMappings());
+    setWantsKeyboardFocus (true);
+
     addAndMakeVisible (waveform);
+    addAndMakeVisible (timeScrollBar);
     addAndMakeVisible (noiseProfileView);
-    addAndMakeVisible (loadButton);
     addAndMakeVisible (statusLabel);
     addAndMakeVisible (originalSpectrogram);
     addAndMakeVisible (processedSpectrogram);
@@ -28,24 +40,32 @@ MainComponent::MainComponent()
     addAndMakeVisible (originalButton);
     addAndMakeVisible (processedButton);
 
-    reductionPanel.alphaSlider.onValueChange = [this] { markStale(); };
+    timeScrollBar.setAutoHide (true);
+    timeScrollBar.addListener (this);
+
+    // Buttons never take keyboard focus, otherwise a focused button would swallow Space / Return.
+    for (auto* b : { &originalButton, &processedButton, &actions.processButton, &actions.playButton })
+        b->setWantsKeyboardFocus (false);
+
+    reductionPanel.alphaSlider.setValue (settings.restoreAlpha (1.0), juce::dontSendNotification);
+    reductionPanel.alphaSlider.onValueChange = [this]
+    {
+        settings.saveAlpha (reductionPanel.alphaSlider.getValue());
+        markStale();
+    };
 
     originalButton.setRadioGroupId (1);
     processedButton.setRadioGroupId (1);
     originalButton.setClickingTogglesState (true);
     processedButton.setClickingTogglesState (true);
     originalButton.setToggleState (true, juce::dontSendNotification);
-    originalButton.onClick = [this] { selectVersion (false); };
-    processedButton.onClick = [this] { selectVersion (true); };
-    actions.processButton.onClick = [this]
-    {
-        if (isProcessing)
-            cancelRequested = true;
-        else
-            startProcessing();
-    };
+    originalButton.onClick = [this] { commandManager.invokeDirectly (CommandIDs::listenOriginal, true); };
+    processedButton.onClick = [this] { commandManager.invokeDirectly (CommandIDs::listenProcessed, true); };
+    actions.processButton.onClick = [this] { commandManager.invokeDirectly (CommandIDs::applyNoiseReduction, true); };
+    actions.playButton.onClick = [this] { commandManager.invokeDirectly (CommandIDs::playPause, true); };
 
     statusLabel.setColour (juce::Label::textColourId, juce::Colour (0xff6e6e73));
+    statusLabel.setJustificationType (juce::Justification::centred);
     refreshStatus();
 
     if (playback.getDeviceError().isNotEmpty())   // plan §8: show it; processing and saving still work
@@ -56,21 +76,16 @@ MainComponent::MainComponent()
                                      "(processing and saving still work).\n\n" + safeThis->playback.getDeviceError());
         });
 
-    loadButton.onClick = [this] { chooseAndLoadFile(); };
-    actions.saveButton.onClick = [this] { chooseAndSaveFile(); };
-    actions.playButton.onClick = [this]
-    {
-        if (playback.isPlaying())
-            playback.stop();
-        else
-            playback.play();
-
-        updateButtons();
-    };
-
     waveform.onSeek = [this] (double seconds) { playback.setPositionSeconds (seconds); };
     waveform.onRegionSelected = [this] (double start, double end) { useNoiseRegion (start, end); };
-    noiseProfileView.onLoadNoiseFile = [this] { chooseAndLoadNoiseFile(); };
+    noiseProfileView.onLoadNoiseFile = [this] { commandManager.invokeDirectly (CommandIDs::openNoiseFile, true); };
+
+   #if JUCE_MAC
+    appMenuExtras.addCommandItem (&commandManager, CommandIDs::showAbout);
+    appMenuExtras.addSeparator();
+    appMenuExtras.addCommandItem (&commandManager, CommandIDs::showKeyboardShortcuts);
+    juce::MenuBarModel::setMacMainMenu (&menuModel, &appMenuExtras);
+   #endif
 
     updateButtons();
     setSize (1440, 900);
@@ -79,12 +94,31 @@ MainComponent::MainComponent()
 
 MainComponent::~MainComponent()
 {
+   #if JUCE_MAC
+    juce::MenuBarModel::setMacMainMenu (nullptr);   // before menuModel is destroyed
+   #endif
+
+    if (auto* top = getTopLevelComponent(); top != nullptr && top != this)
+        top->removeKeyListener (commandManager.getKeyMappings());
+
+    commandManager.getKeyMappings()->removeChangeListener (this);
+    viewState.removeChangeListener (this);
     stopTimer();
     cancelRequested = true;
     if (worker != nullptr)
         worker->stopThread (5000);
     if (loader != nullptr)
         loader->stopThread (10000);
+}
+
+void MainComponent::parentHierarchyChanged()
+{
+    // Also listen on the window so shortcuts work even if some child holds keyboard focus.
+    if (auto* top = getTopLevelComponent(); top != nullptr && top != this)
+    {
+        top->removeKeyListener (commandManager.getKeyMappings());
+        top->addKeyListener (commandManager.getKeyMappings());
+    }
 }
 
 void MainComponent::paint (juce::Graphics& g)
@@ -101,7 +135,6 @@ void MainComponent::resized()
     auto bar = area.removeFromTop (44);
 
     bar.removeFromLeft (332);
-    loadButton.setBounds (bar.removeFromLeft (130).withSizeKeepingCentre (130, 36));
     processedButton.setBounds (bar.removeFromRight (100).withSizeKeepingCentre (100, 36));
     originalButton.setBounds (bar.removeFromRight (100).withSizeKeepingCentre (100, 36));
     bar.removeFromLeft (16);
@@ -111,15 +144,19 @@ void MainComponent::resized()
     const int gap = 14;
     const int usable = area.getHeight() - 3 * gap;
     area.removeFromTop (gap);
-    waveform.setBounds (area.removeFromTop (usable * 20 / 100));
-    area.removeFromTop (gap);
+    waveform.setBounds (area.removeFromTop (usable * (spectrogramsVisible ? 20 : 58) / 100));
+    timeScrollBar.setBounds (area.removeFromTop (12));
+    area.removeFromTop (gap - 4);
 
-    auto spectrograms = area.removeFromTop (usable * 38 / 100);
+    auto spectrograms = area.removeFromTop (usable * (spectrogramsVisible ? 38 : 0) / 100);
+    originalSpectrogram.setVisible (spectrogramsVisible);
+    processedSpectrogram.setVisible (spectrogramsVisible);
     originalSpectrogram.setBounds (spectrograms.removeFromLeft ((spectrograms.getWidth() - gap) / 2));
     spectrograms.removeFromLeft (gap);
     processedSpectrogram.setBounds (spectrograms);
 
-    area.removeFromTop (gap);
+    if (spectrogramsVisible)
+        area.removeFromTop (gap);
     actions.setBounds (area.removeFromRight (240));
     area.removeFromRight (gap);
     reductionPanel.setBounds (area.removeFromRight (280));
@@ -133,6 +170,16 @@ void MainComponent::timerCallback()
     waveform.setPlayheadSeconds (position);
     originalSpectrogram.setPlayheadSeconds (position);
     processedSpectrogram.setPlayheadSeconds (position);
+
+    if (followPlayheadEnabled && playback.isPlaying())
+    {
+        const auto visible = viewState.getVisibleRange();
+        if (position > visible.getStart() + 0.9 * visible.getLength() || position < visible.getStart())
+            viewState.setVisibleRange (visible.movedToStartAt (position - 0.1 * visible.getLength()));
+    }
+
+    if (statusHoldTicks > 0 && --statusHoldTicks == 0 && ! isProcessing && ! isLoading)
+        refreshStatus();
 
     if (isProcessing)
         actions.processButton.setButtonText ("Cancel  " + juce::String (juce::roundToInt (progress.load() * 100.0f)) + "%");
@@ -148,6 +195,7 @@ void MainComponent::updateButtons()
     const bool busy = isProcessing || isLoading;
     waveform.setInterceptsMouseClicks (! busy, ! busy);
     actions.playButton.setEnabled (hasAudio);
+    commandManager.commandStatusChanged();   // refresh menu items, ticks and shortcuts-dependent state
     actions.playButton.setButtonText (playback.isPlaying() ? "Stop" : "Play");
     noiseProfileView.setLoadEnabled (hasAudio && ! busy);
 
@@ -166,8 +214,8 @@ void MainComponent::updateButtons()
     processedButton.setEnabled (hasProcessed && ! busy);
     originalButton.setEnabled (hasAudio && ! busy);
     reductionPanel.alphaSlider.setEnabled (! busy);
-    loadButton.setEnabled (! busy);
-    actions.saveButton.setEnabled (hasAudio && ! busy);
+    originalButton.setToggleState (! processedSelected, juce::dontSendNotification);
+    processedButton.setToggleState (processedSelected, juce::dontSendNotification);
 }
 
 void MainComponent::showError (const juce::String& message)
@@ -189,23 +237,23 @@ void MainComponent::chooseAndLoadFile()
         if (file == juce::File())
             return;
 
-        startLoad (file, false);
+        loadInputFile (file);
     });
 }
 
-void MainComponent::chooseAndSaveFile()
+void MainComponent::chooseAndSaveFile (std::function<void()> afterSave)
 {
     chooser = std::make_unique<juce::FileChooser> ("Save as WAV", inputFile.withFileExtension ("wav"), "*.wav");
 
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                               | juce::FileBrowserComponent::warnAboutOverwriting,
-                          [this] (const juce::FileChooser& fc)
+                          [this, afterSave] (const juce::FileChooser& fc)
     {
         auto file = fc.getResult();
         if (file == juce::File())
             return;
 
-        saveCurrent (file.withFileExtension ("wav"), processedSelected ? processed : input.buffer);
+        saveCurrent (file.withFileExtension ("wav"), processed, afterSave);
     });
 }
 
@@ -255,7 +303,7 @@ void MainComponent::chooseAndLoadNoiseFile()
         if (file == juce::File())
             return;
 
-        startLoad (file, true);
+        loadNoiseFile (file);
     });
 }
 
@@ -320,6 +368,7 @@ void MainComponent::finishProcessing (juce::Result result, juce::AudioBuffer<flo
     {
         processed = std::move (processedAudio);
         hasProcessed = true;
+        processedExported = false;
         stale = settingsVersion != settingsAtStart;   // settings changed while it ran
         statusLabel.setText ("Processed with alpha = " + juce::String (reductionPanel.alphaSlider.getValue(), 2)
                                  + ". Use Original / Processed to compare.",
@@ -340,9 +389,9 @@ void MainComponent::finishProcessing (juce::Result result, juce::AudioBuffer<flo
     updateButtons();
 }
 
-void MainComponent::saveCurrent (const juce::File& file, juce::AudioBuffer<float> audio)
+void MainComponent::saveCurrent (const juce::File& file, juce::AudioBuffer<float> audio, std::function<void()> afterSave)
 {
-    auto write = [safeThis = juce::Component::SafePointer<MainComponent> (this), file] (const juce::AudioBuffer<float>& toWrite)
+    auto write = [safeThis = juce::Component::SafePointer<MainComponent> (this), file, afterSave] (const juce::AudioBuffer<float>& toWrite)
     {
         if (safeThis == nullptr)
             return;
@@ -352,7 +401,13 @@ void MainComponent::saveCurrent (const juce::File& file, juce::AudioBuffer<float
         if (result.failed())
             safeThis->showError (result.getErrorMessage());
         else
-            safeThis->statusLabel.setText ("Saved " + file.getFileName(), juce::dontSendNotification);
+        {
+            safeThis->processedExported = true;
+            safeThis->setStatus ("Exported " + file.getFileName());
+
+            if (afterSave)
+                afterSave();
+        }
     };
 
     const float peak = AudioFileManager::getPeak (audio);
@@ -386,16 +441,31 @@ void MainComponent::saveCurrent (const juce::File& file, juce::AudioBuffer<float
 
 void MainComponent::refreshStatus()
 {
-    if (input.buffer.getNumSamples() == 0)
+    if (! hasInputAudio())
     {
-        statusLabel.setText ("No file loaded", juce::dontSendNotification);
+       #if JUCE_MAC
+        statusLabel.setText ("No file loaded - press Cmd+O or drop a file", juce::dontSendNotification);
+       #else
+        statusLabel.setText ("No file loaded - press Ctrl+O or drop a file", juce::dontSendNotification);
+       #endif
         return;
     }
 
-    statusLabel.setText (inputFile.getFileName() + "  -  " + juce::String (input.sampleRate, 0) + " Hz, "
-                             + juce::String (input.buffer.getNumChannels()) + " ch, "
-                             + juce::String (input.buffer.getNumSamples() / input.sampleRate, 2) + " s",
+    const int totalSeconds = juce::roundToInt (input.buffer.getNumSamples() / input.sampleRate);
+    const auto channels = input.buffer.getNumChannels() == 1 ? juce::String ("mono")
+                        : input.buffer.getNumChannels() == 2 ? juce::String ("stereo")
+                                                             : juce::String (input.buffer.getNumChannels()) + " ch";
+
+    statusLabel.setText (inputFile.getFileName() + "  -  " + juce::String (input.sampleRate / 1000.0, 1) + " kHz  -  "
+                             + juce::String (totalSeconds / 60) + ":" + juce::String (totalSeconds % 60).paddedLeft ('0', 2)
+                             + "  -  " + channels,
                          juce::dontSendNotification);
+}
+
+void MainComponent::setStatus (const juce::String& text)
+{
+    statusLabel.setText (text, juce::dontSendNotification);
+    statusHoldTicks = 120;   // ~4 s at 30 Hz, then the file info comes back
 }
 
 void MainComponent::startLoad (const juce::File& file, bool isNoiseFile)
@@ -461,6 +531,10 @@ void MainComponent::finishLoad (const juce::File& file, bool isNoiseFile, LoadOu
     playback.stop();
     input = std::move (outcome.audio);
     inputFile = file;
+    viewState.setTotalLength (input.buffer.getNumSamples() / input.sampleRate);
+    recentFiles.addFile (file);
+    settings.saveRecentFiles (recentFiles);
+    processedExported = true;
     playback.setAudio (input.buffer, input.sampleRate);
     waveform.setAudio (input.buffer, input.sampleRate);
     originalSpectrogram.setAudio (input.buffer, input.sampleRate);
@@ -473,6 +547,513 @@ void MainComponent::finishLoad (const juce::File& file, bool isNoiseFile, LoadOu
     refreshStatus();
     updateButtons();
 
+    grabKeyboardFocus();
+
     if (input.numNonFiniteReplaced > 0)
         showError (juce::String (input.numNonFiniteReplaced) + " invalid (NaN/Inf) samples were replaced with silence.");
+}
+
+// ---- Commands ------------------------------------------------------------------------------------------------
+
+void MainComponent::getAllCommands (juce::Array<juce::CommandID>& c)
+{
+    using namespace CommandIDs;
+    c.addArray ({ openAudio, openNoiseFile, exportProcessed, closeFile,
+                  clearSelection, CommandIDs::clearNoiseProfile, resetAllParameters,
+                  zoomIn, zoomOut, zoomToFit, zoomToSelection, followPlayhead, toggleSpectrograms,
+                  applyNoiseReduction, alphaUp, alphaDown, alphaUpFine, alphaDownFine, alphaReset,
+                  playPause, stop, returnToStart, listenOriginal, listenProcessed, CommandIDs::toggleListenSource,
+                  showKeyboardShortcuts, CommandIDs::showAbout });
+}
+
+void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommandInfo& info)
+{
+    using namespace CommandIDs;
+    namespace Cat = CommandCategories;
+    const auto cmd = juce::ModifierKeys::commandModifier;
+    const auto shift = juce::ModifierKeys::shiftModifier;
+    const bool busy = isProcessing || isLoading;
+    const bool canProcess = hasInputAudio() && ! noiseProfiles.empty();
+    const double alpha = reductionPanel.alphaSlider.getValue();
+
+    switch (id)
+    {
+        case openAudio:
+            info.setInfo ("Open Audio...", "Load the noisy recording to clean", Cat::file, 0);
+            info.addDefaultKeypress ('o', cmd);
+            info.setActive (! busy);
+            break;
+
+        case openNoiseFile:
+            info.setInfo ("Open Noise File...", "Load a noise-only recording for the profile", Cat::file, 0);
+            info.addDefaultKeypress ('o', cmd | shift);
+            info.setActive (hasInputAudio() && ! busy);
+            break;
+
+        case exportProcessed:
+            info.setInfo ("Export Processed Audio...", "Save the cleaned audio as WAV", Cat::file, 0);
+            info.addDefaultKeypress ('e', cmd);
+            info.setActive (hasProcessed && ! stale && ! busy);
+            break;
+
+        case closeFile:
+            info.setInfo ("Close File", "Close the current recording", Cat::file, 0);
+            info.addDefaultKeypress ('w', cmd);
+            info.setActive (hasInputAudio() && ! busy);
+            break;
+
+        case clearSelection:
+            info.setInfo ("Clear Selection", "Remove the marked noise region", Cat::edit, 0);
+            info.addDefaultKeypress (juce::KeyPress::escapeKey, 0);
+            info.setActive (waveform.hasSelection());
+            break;
+
+        case CommandIDs::clearNoiseProfile:
+            info.setInfo ("Clear Noise Profile", "Forget the learned noise profile", Cat::edit, 0);
+            info.addDefaultKeypress (juce::KeyPress::backspaceKey, cmd);
+            info.setActive (! noiseProfiles.empty() && ! busy);
+            break;
+
+        case resetAllParameters:
+            info.setInfo ("Reset All Parameters", "Restore the default settings", Cat::edit, 0);
+            info.setActive (! busy);
+            break;
+
+        case zoomIn:
+            info.setInfo ("Zoom In", "Show less time, more detail", Cat::view, 0);
+            info.addDefaultKeypress ('=', cmd);
+            info.addDefaultKeypress ('+', cmd);
+            info.setActive (hasInputAudio() && viewState.canZoomIn());
+            break;
+
+        case zoomOut:
+            info.setInfo ("Zoom Out", "Show more time", Cat::view, 0);
+            info.addDefaultKeypress ('-', cmd);
+            info.setActive (hasInputAudio() && viewState.canZoomOut());
+            break;
+
+        case zoomToFit:
+            info.setInfo ("Zoom to Fit", "Show the whole recording", Cat::view, 0);
+            info.addDefaultKeypress ('0', cmd);
+            info.setActive (hasInputAudio());
+            break;
+
+        case zoomToSelection:
+            info.setInfo ("Zoom to Selection", "Zoom to the marked noise region", Cat::view, 0);
+            info.addDefaultKeypress ('z', 0);
+            info.setActive (waveform.hasSelection());
+            break;
+
+        case followPlayhead:
+            info.setInfo ("Follow Playhead", "Scroll the view along with playback", Cat::view, 0);
+            info.addDefaultKeypress ('f', 0);
+            info.setActive (hasInputAudio());
+            info.setTicked (followPlayheadEnabled);
+            break;
+
+        case toggleSpectrograms:
+            info.setInfo ("Show Spectrograms", "Show or hide the spectrogram panels", Cat::view, 0);
+            info.addDefaultKeypress ('s', cmd | shift);
+            info.setTicked (spectrogramsVisible);
+            break;
+
+        case applyNoiseReduction:
+            info.setInfo (isProcessing ? "Cancel Processing" : "Apply Noise Reduction",
+                          "Run spectral subtraction with the current settings", Cat::process, 0);
+            info.addDefaultKeypress (juce::KeyPress::returnKey, cmd);
+            info.setActive (isProcessing || (canProcess && ! isLoading));
+            break;
+
+        case alphaUp:
+            info.setInfo ("Increase Alpha", "Stronger noise reduction (+0.1)", Cat::process, 0);
+            info.addDefaultKeypress (']', 0);
+            info.setActive (! busy);
+            break;
+
+        case alphaDown:
+            info.setInfo ("Decrease Alpha", "Gentler noise reduction (-0.1)", Cat::process, 0);
+            info.addDefaultKeypress ('[', 0);
+            info.setActive (! busy);
+            break;
+
+        case alphaUpFine:
+            info.setInfo ("Increase Alpha (Fine)", "+0.01", Cat::process, 0);
+            info.addDefaultKeypress (']', shift);
+            info.addDefaultKeypress ('}', shift);
+            info.setActive (! busy);
+            break;
+
+        case alphaDownFine:
+            info.setInfo ("Decrease Alpha (Fine)", "-0.01", Cat::process, 0);
+            info.addDefaultKeypress ('[', shift);
+            info.addDefaultKeypress ('{', shift);
+            info.setActive (! busy);
+            break;
+
+        case alphaReset:
+            info.setInfo ("Reset Alpha", "Back to 1.0", Cat::process, 0);
+            info.addDefaultKeypress ('\\', 0);
+            info.setActive (! busy && ! juce::approximatelyEqual (alpha, 1.0));
+            break;
+
+        case playPause:
+            info.setInfo (playback.isPlaying() ? "Pause" : "Play", "Start or pause playback", Cat::playback, 0);
+            info.addDefaultKeypress (juce::KeyPress::spaceKey, 0);
+            info.setActive (hasInputAudio());
+            break;
+
+        case stop:
+            info.setInfo ("Stop", "Stop playback", Cat::playback, 0);
+            info.addDefaultKeypress ('.', 0);
+            info.setActive (playback.isPlaying());
+            break;
+
+        case returnToStart:
+            info.setInfo ("Return to Start", "Move the playhead to the start", Cat::playback, 0);
+            info.addDefaultKeypress (juce::KeyPress::homeKey, 0);
+            info.addDefaultKeypress (juce::KeyPress::returnKey, 0);
+            info.setActive (hasInputAudio());
+            break;
+
+        case listenOriginal:
+            info.setInfo ("Listen to Original", "Play the unprocessed input", Cat::playback, 0);
+            info.addDefaultKeypress ('1', 0);
+            info.setActive (hasInputAudio() && ! busy);
+            info.setTicked (! processedSelected);
+            break;
+
+        case listenProcessed:
+            info.setInfo ("Listen to Processed", "Play the noise-reduced audio", Cat::playback, 0);
+            info.addDefaultKeypress ('2', 0);
+            info.setActive (hasProcessed && ! busy);
+            info.setTicked (processedSelected);
+            break;
+
+        case CommandIDs::toggleListenSource:
+            info.setInfo ("Toggle Original / Processed", "Switch between the two versions", Cat::playback, 0);
+            info.addDefaultKeypress (juce::KeyPress::tabKey, 0);
+            info.setActive (hasProcessed && ! busy);
+            break;
+
+        case showKeyboardShortcuts:
+            info.setInfo ("Keyboard Shortcuts...", "View and change keyboard shortcuts", Cat::help, 0);
+            info.addDefaultKeypress (',', cmd);
+            break;
+
+        case CommandIDs::showAbout:
+            info.setInfo ("About Spectral Noise Cancellation", "About this application", Cat::help, 0);
+            break;
+
+        default:
+            break;
+    }
+}
+
+bool MainComponent::perform (const InvocationInfo& info)
+{
+    using namespace CommandIDs;
+    auto& alphaSlider = reductionPanel.alphaSlider;
+
+    switch (info.commandID)
+    {
+        case openAudio:               chooseAndLoadFile();                                    break;
+        case openNoiseFile:           chooseAndLoadNoiseFile();                               break;
+        case exportProcessed:         chooseAndSaveFile();                                    break;
+        case closeFile:               closeCurrentFile();                                     break;
+
+        case clearSelection:          waveform.clearRegion();                                 break;
+        case CommandIDs::clearNoiseProfile:     clearNoiseProfile(); markStale();                       break;
+        case resetAllParameters:      alphaSlider.setValue (1.0);                             break;
+
+        case zoomIn:                  viewState.zoomAround (zoomAnchor(), 2.0);               break;
+        case zoomOut:                 viewState.zoomAround (zoomAnchor(), 0.5);               break;
+        case zoomToFit:               viewState.zoomToFit();                                  break;
+        case zoomToSelection:
+        {
+            const auto sel = waveform.getSelection();
+            const auto pad = sel.getLength() * 0.05;
+            viewState.setVisibleRange ({ sel.getStart() - pad, sel.getEnd() + pad });
+            break;
+        }
+        case followPlayhead:          followPlayheadEnabled = ! followPlayheadEnabled;        break;
+        case toggleSpectrograms:      spectrogramsVisible = ! spectrogramsVisible; resized(); repaint(); break;
+
+        case applyNoiseReduction:
+            if (isProcessing)
+                cancelRequested = true;
+            else
+                startProcessing();
+            break;
+
+        case alphaUp:                 nudgeAlpha (+1, false);                                 break;
+        case alphaDown:               nudgeAlpha (-1, false);                                 break;
+        case alphaUpFine:             nudgeAlpha (+1, true);                                  break;
+        case alphaDownFine:           nudgeAlpha (-1, true);                                  break;
+        case alphaReset:              alphaSlider.setValue (1.0);
+                                      setStatus ("alpha " + juce::String (alphaSlider.getValue(), 2));   break;
+
+        case playPause:               togglePlayback();                                       break;
+        case stop:                    playback.stop(); updateButtons();                       break;
+        case returnToStart:           playback.setPositionSeconds (0.0);                      break;
+        case listenOriginal:          selectVersion (false); updateButtons();                 break;
+        case listenProcessed:         selectVersion (true);  updateButtons();                 break;
+        case CommandIDs::toggleListenSource:      toggleListenSource();                                   break;
+
+        case showKeyboardShortcuts:   showShortcutEditor();                                   break;
+        case CommandIDs::showAbout:               showAbout();                                            break;
+
+        default: return false;
+    }
+
+    commandManager.commandStatusChanged();
+    return true;
+}
+
+void MainComponent::togglePlayback()
+{
+    if (playback.isPlaying())
+        playback.stop();
+    else
+        playback.play();
+
+    updateButtons();
+}
+
+void MainComponent::toggleListenSource()
+{
+    selectVersion (! processedSelected);
+    updateButtons();
+}
+
+void MainComponent::nudgeAlpha (int direction, bool fine)
+{
+    auto& slider = reductionPanel.alphaSlider;
+    const double step = fine ? 0.01 : 0.1;
+    // Round to 0.01 so repeated steps never drift (1.0000000002 and the like).
+    const double value = std::round ((slider.getValue() + direction * step) * 100.0) / 100.0;
+    slider.setValue (juce::jlimit (slider.getMinimum(), slider.getMaximum(), value));
+    setStatus ("alpha " + juce::String (slider.getValue(), 2));
+}
+
+double MainComponent::zoomAnchor() const
+{
+    const auto visible = viewState.getVisibleRange();
+    const double playhead = playback.getPositionSeconds();
+    return visible.contains (playhead) ? playhead : visible.getStart() + 0.5 * visible.getLength();
+}
+
+void MainComponent::changeListenerCallback (juce::ChangeBroadcaster* source)
+{
+    if (source == commandManager.getKeyMappings())
+        settings.saveKeyMappings (*commandManager.getKeyMappings());
+    else if (source == &viewState)
+    {
+        updateScrollBar();
+        commandManager.commandStatusChanged();
+    }
+}
+
+void MainComponent::updateScrollBar()
+{
+    timeScrollBar.setRangeLimits (0.0, juce::jmax (0.001, viewState.getTotalLength()), juce::dontSendNotification);
+    timeScrollBar.setCurrentRange (viewState.getVisibleRange().getStart(), viewState.getVisibleRange().getLength(),
+                                   juce::dontSendNotification);
+}
+
+void MainComponent::scrollBarMoved (juce::ScrollBar*, double newRangeStart)
+{
+    viewState.setVisibleRange (viewState.getVisibleRange().movedToStartAt (newRangeStart));
+}
+
+void MainComponent::showShortcutEditor()
+{
+    auto* editor = new juce::KeyMappingEditorComponent (*commandManager.getKeyMappings(), true);
+    editor->setSize (560, 620);
+
+    juce::DialogWindow::LaunchOptions o;
+    o.content.setOwned (editor);
+    o.dialogTitle = "Keyboard Shortcuts";
+    o.dialogBackgroundColour = AppLookAndFeel::window;
+    o.escapeKeyTriggersCloseButton = true;
+    o.useNativeTitleBar = true;
+    o.resizable = true;
+    o.launchAsync();
+}
+
+void MainComponent::showAbout()
+{
+    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Spectral Noise Cancellation",
+                                            "Spectral-subtraction noise reduction.\n\n"
+                                            "Mark a noise-only section (or load a noise file), then press Process.");
+}
+
+// ---- Loading, closing and the unsaved-work guard -------------------------------------------------------------
+
+void MainComponent::confirmDiscardIfNeeded (std::function<void()> proceed)
+{
+    if (! hasProcessed || processedExported)
+    {
+        proceed();
+        return;
+    }
+
+    const auto options = juce::MessageBoxOptions()
+                             .withIconType (juce::MessageBoxIconType::QuestionIcon)
+                             .withTitle ("Discard processed audio?")
+                             .withMessage ("The processed audio has not been exported.")
+                             .withButton ("Export...")
+                             .withButton ("Discard")
+                             .withButton ("Cancel");
+
+    juce::AlertWindow::showAsync (options, [safeThis = juce::Component::SafePointer<MainComponent> (this), proceed] (int result)
+    {
+        if (safeThis == nullptr)
+            return;
+
+        if (result == 1)
+            safeThis->chooseAndSaveFile (proceed);   // export first, then carry on
+        else if (result == 2)
+            proceed();
+        // 0 = cancel
+    });
+}
+
+void MainComponent::loadInputFile (const juce::File& file)
+{
+    if (isLoading || isProcessing)
+        return;
+
+    confirmDiscardIfNeeded ([safeThis = juce::Component::SafePointer<MainComponent> (this), file]
+    {
+        if (safeThis != nullptr)
+            safeThis->startLoad (file, false);
+    });
+}
+
+void MainComponent::loadNoiseFile (const juce::File& file)
+{
+    if (hasInputAudio())
+        startLoad (file, true);
+}
+
+void MainComponent::closeCurrentFile()
+{
+    confirmDiscardIfNeeded ([safeThis = juce::Component::SafePointer<MainComponent> (this)]
+    {
+        auto* self = safeThis.getComponent();
+        if (self == nullptr)
+            return;
+
+        self->playback.clear();
+        self->input = {};
+        self->inputFile = juce::File();
+        self->processed = {};
+        self->hasProcessed = self->processedSelected = false;
+        self->processedExported = true;
+        self->stale = true;
+        ++self->settingsVersion;
+        self->waveform.setAudio (juce::AudioBuffer<float> (1, 0), 44100.0);
+        self->originalSpectrogram.clear();
+        self->processedSpectrogram.clear();
+        self->clearNoiseProfile();
+        self->viewState.setTotalLength (0.0);
+        self->refreshStatus();
+        self->updateButtons();
+    });
+}
+
+// ---- Drag and drop -------------------------------------------------------------------------------------------
+
+juce::Rectangle<int> MainComponent::inputDropArea() const
+{
+    return getLocalBounds().withBottom (noiseProfileView.getY());
+}
+
+MainComponent::DropZone MainComponent::dropZoneAt (juce::Point<int> p) const
+{
+    if (noiseProfileView.getBounds().contains (p))
+        return hasInputAudio() ? DropZone::noise : DropZone::input;   // no input yet: treat it as the input
+
+    if (inputDropArea().contains (p))
+        return DropZone::input;
+
+    return DropZone::none;
+}
+
+bool MainComponent::isSupportedAudioFile (const juce::File& f) const
+{
+    static const auto extensions = [] { juce::AudioFormatManager m; m.registerBasicFormats(); return m.getWildcardForAllFormats() + ";"; }();
+    return f.existsAsFile() && extensions.containsIgnoreCase ("*" + f.getFileExtension() + ";");
+}
+
+bool MainComponent::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    if (isProcessing || isLoading)
+        return false;
+
+    for (auto& path : files)
+        if (isSupportedAudioFile (juce::File (path)))
+            return true;
+
+    return false;
+}
+
+void MainComponent::fileDragEnter (const juce::StringArray&, int x, int y) { updateDropZone ({ x, y }); }
+void MainComponent::fileDragMove (const juce::StringArray&, int x, int y)  { updateDropZone ({ x, y }); }
+void MainComponent::fileDragExit (const juce::StringArray&)                { updateDropZone ({ -1, -1 }); }
+
+void MainComponent::updateDropZone (juce::Point<int> p)
+{
+    const auto zone = dropZoneAt (p);
+
+    if (zone != currentDropZone)
+    {
+        currentDropZone = zone;
+        repaint();
+    }
+}
+
+void MainComponent::filesDropped (const juce::StringArray& files, int x, int y)
+{
+    const auto zone = dropZoneAt ({ x, y });
+    currentDropZone = DropZone::none;
+    repaint();
+
+    juce::File chosen;
+    int supportedCount = 0;
+
+    for (auto& path : files)
+        if (const juce::File f (path); isSupportedAudioFile (f) && supportedCount++ == 0)
+            chosen = f;
+
+    if (! chosen.existsAsFile() || zone == DropZone::none)
+        return;
+
+    const bool noiseDroppedWithoutInput = ! hasInputAudio() && noiseProfileView.getBounds().contains (juce::Point<int> (x, y));
+
+    if (zone == DropZone::noise)
+        loadNoiseFile (chosen);
+    else
+        loadInputFile (chosen);
+
+    if (noiseDroppedWithoutInput)
+        setStatus ("Loaded as input - load a recording before adding a noise file");
+    else if (supportedCount > 1)
+        setStatus ("Loaded " + chosen.getFileName() + " (other dropped files ignored)");
+}
+
+void MainComponent::paintOverChildren (juce::Graphics& g)
+{
+    if (currentDropZone == DropZone::none)
+        return;
+
+    const auto area = (currentDropZone == DropZone::noise ? noiseProfileView.getBounds() : inputDropArea()).toFloat();
+    const auto label = currentDropZone == DropZone::noise ? "Drop to load as noise profile" : "Drop to load as input audio";
+
+    g.setColour (AppLookAndFeel::accent.withAlpha (0.10f));
+    g.fillRoundedRectangle (area, 12.0f);
+    g.setColour (AppLookAndFeel::accent);
+    g.drawRoundedRectangle (area.reduced (1.0f), 12.0f, 2.0f);
+    g.setFont (juce::FontOptions (16.0f, juce::Font::bold));
+    g.drawText (label, area, juce::Justification::centred);
 }

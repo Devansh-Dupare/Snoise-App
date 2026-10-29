@@ -1,5 +1,6 @@
 #include "SpectrogramView.h"
 #include "MagmaColourMap.h"
+#include "TimelineGestures.h"
 #include "dsp/Spectrogram.h"
 
 namespace
@@ -21,13 +22,15 @@ namespace
     }
 }
 
-SpectrogramView::SpectrogramView (juce::String t, juce::String p)
-    : title (std::move (t)), placeholder (std::move (p))
+SpectrogramView::SpectrogramView (ViewState& vs, juce::String t, juce::String p)
+    : viewState (vs), title (std::move (t)), placeholder (std::move (p))
 {
+    viewState.addChangeListener (this);
 }
 
 SpectrogramView::~SpectrogramView()
 {
+    viewState.removeChangeListener (this);
     ++*generation;   // lets a running job bail out early
     pool.removeAllJobs (true, 10000);
 }
@@ -48,6 +51,11 @@ void SpectrogramView::setAudio (const juce::AudioBuffer<float>& audio, double ne
     sampleRate = newSampleRate;
     durationSeconds = audio.getNumSamples() / newSampleRate;
     computing = true;
+
+    const StftConfig config;
+    const int length = audio.getNumSamples();
+    const int totalFrames = length < config.fftSize() ? 1 : 1 + (length - config.fftSize()) / config.hopSize;
+    frameStride = juce::jmax (1, (totalFrames + 4095) / 4096);   // must match computeSpectrogram's default
     repaint();
 
     pool.addJob ([safeThis = juce::Component::SafePointer<SpectrogramView> (this), gen = generation,
@@ -115,8 +123,25 @@ void SpectrogramView::paint (juce::Graphics& g)
         return;
     }
 
-    g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
-    g.drawImage (image, plot.toFloat(), juce::RectanglePlacement::stretchToFit);
+    const auto visible = viewState.getVisibleRange();
+    const StftConfig config;
+    const double columnsPerSecond = sampleRate / (static_cast<double> (config.hopSize) * frameStride);
+    // Column m is the STFT frame whose centre is at (m*stride*H + N/2) / fs; the +0.5 centres the column's pixel.
+    const double centreOffset = (config.fftSize() * 0.5) / (static_cast<double> (config.hopSize) * frameStride) - 0.5;
+    const double srcX = visible.getStart() * columnsPerSecond - centreOffset;
+    const double srcW = visible.getLength() * columnsPerSecond;
+
+    {
+        juce::Graphics::ScopedSaveState saved (g);
+        g.reduceClipRegion (plot);
+        g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);   // show true STFT frames when zoomed in
+
+        const auto transform = juce::AffineTransform::translation (static_cast<float> (-srcX), 0.0f)
+                                   .scaled (static_cast<float> (plot.getWidth() / srcW),
+                                            static_cast<float> (plot.getHeight()) / static_cast<float> (image.getHeight()))
+                                   .translated (static_cast<float> (plot.getX()), static_cast<float> (plot.getY()));
+        g.drawImageTransformed (image, transform);
+    }
 
     // Frequency axis (kHz) and time axis (s).
     g.setColour (textSecondary);
@@ -130,19 +155,35 @@ void SpectrogramView::paint (juce::Graphics& g)
     }
 
     double timeStep = 1.0;
-    for (const double candidate : { 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0 })
+    for (const double candidate : { 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0 })
     {
         timeStep = candidate;
-        if (candidate / durationSeconds * plot.getWidth() >= 70.0)
+        if (candidate / visible.getLength() * plot.getWidth() >= 70.0)
             break;
     }
-    for (double t = 0.0; t <= durationSeconds; t += timeStep)
+
+    const int decimals = timeStep < 0.1 ? 2 : (timeStep < 1.0 ? 1 : 0);
+    const auto plotF = plot.toFloat();
+    for (double t = std::ceil (visible.getStart() / timeStep) * timeStep; t <= visible.getEnd(); t += timeStep)
     {
-        const auto x = static_cast<float> (plot.getX()) + static_cast<float> (t / durationSeconds) * static_cast<float> (plot.getWidth());
-        g.drawText (juce::String (t, 0) + "s", juce::roundToInt (x) - 20, plot.getBottom() + 3, 40, 14, juce::Justification::centred);
+        const auto x = viewState.timeToX (t, plotF);
+        g.drawText (juce::String (t, decimals) + "s", juce::roundToInt (x) - 20, plot.getBottom() + 3, 40, 14, juce::Justification::centred);
     }
 
-    const auto px = static_cast<float> (plot.getX()) + static_cast<float> (playheadSeconds / durationSeconds) * static_cast<float> (plot.getWidth());
-    g.setColour (juce::Colours::white);
-    g.drawLine (px, static_cast<float> (plot.getY()), px, static_cast<float> (plot.getBottom()), 2.0f);
+    if (visible.contains (playheadSeconds))
+    {
+        const auto px = viewState.timeToX (playheadSeconds, plotF);
+        g.setColour (juce::Colours::white);
+        g.drawLine (px, static_cast<float> (plot.getY()), px, static_cast<float> (plot.getBottom()), 2.0f);
+    }
+}
+
+void SpectrogramView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    handleTimelineWheel (viewState, e, w, getPlotBounds().toFloat());
+}
+
+void SpectrogramView::mouseMagnify (const juce::MouseEvent& e, float scaleFactor)
+{
+    handleTimelineMagnify (viewState, e, scaleFactor, getPlotBounds().toFloat());
 }

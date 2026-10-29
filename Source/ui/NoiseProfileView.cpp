@@ -10,6 +10,7 @@ namespace
 
 NoiseProfileView::NoiseProfileView()
 {
+    loadButton.setWantsKeyboardFocus (false);
     addAndMakeVisible (loadButton);
     loadButton.onClick = [this] { if (onLoadNoiseFile) onLoadNoiseFile(); };
     loadButton.setTooltip ("Load a separate noise-only recording (must match the input's sample rate)");

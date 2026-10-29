@@ -5,11 +5,12 @@ NoiseReductionPanel::NoiseReductionPanel()
 {
     alphaSlider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     alphaSlider.setRotaryParameters (juce::degreesToRadians (225.0f), juce::degreesToRadians (495.0f), true);
-    alphaSlider.setRange (0.0, 5.0, 0.05);
+    alphaSlider.setRange (0.0, 5.0, 0.01);
     alphaSlider.setValue (1.0, juce::dontSendNotification);
     alphaSlider.setDoubleClickReturnValue (true, 1.0);
     alphaSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 70, 24);
     alphaSlider.setTooltip ("alpha: how much of the noise estimate is subtracted (double-click to reset)");
+    alphaSlider.setWantsKeyboardFocus (false);   // so Space / Return reach the command manager
     addAndMakeVisible (alphaSlider);
 }
 
