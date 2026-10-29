@@ -3,6 +3,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <atomic>
+#include "BinaryData.h"
 #include "Commands.h"
 #include "audio/PlaybackController.h"
 #include "io/AppSettings.h"
@@ -130,6 +131,7 @@ private:
     SpectrogramView processedSpectrogram { viewState, "Processed", "Mark some noise, then press Process" };
     NoiseReductionPanel reductionPanel;
     ActionsPanel actions;
+    juce::Image logo = juce::ImageFileFormat::loadFrom (BinaryData::AppIcon_png, BinaryData::AppIcon_pngSize);
     juce::PopupMenu appMenuExtras;
     juce::TooltipWindow tooltipWindow { this };
     juce::Label statusLabel;

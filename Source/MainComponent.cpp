@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 #include "ui/AppLookAndFeel.h"
+#include "BinaryData.h"
 
 namespace
 {
@@ -126,7 +127,8 @@ void MainComponent::paint (juce::Graphics& g)
     g.fillAll (AppLookAndFeel::window);
     g.setColour (AppLookAndFeel::textPrimary);
     g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
-    g.drawText ("Snoise Editor", 24, 24, 320, 44, juce::Justification::centredLeft);
+    g.drawImage (logo, juce::Rectangle<float> (24.0f, 20.0f, 52.0f, 52.0f), juce::RectanglePlacement::centred);
+    g.drawText ("Snoise Editor", 84, 24, 260, 44, juce::Justification::centredLeft);
 }
 
 void MainComponent::resized()

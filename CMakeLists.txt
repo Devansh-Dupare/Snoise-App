@@ -20,7 +20,10 @@ set(CORE_SOURCES
     Source/io/AudioFileManager.cpp)
 
 # ---- Standalone GUI app (no plugin targets) ----
+juce_add_binary_data(SncAssets SOURCES Resources/AppIcon.png)
+
 juce_add_gui_app(SpectralNoiseCancellation
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Resources/AppIcon.png"
     PRODUCT_NAME "Snoise Editor"
     COMPANY_NAME "YourName")
 
@@ -45,7 +48,7 @@ target_compile_definitions(SpectralNoiseCancellation PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:SpectralNoiseCancellation,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:SpectralNoiseCancellation,JUCE_VERSION>")
 target_link_libraries(SpectralNoiseCancellation
-    PRIVATE juce::juce_audio_utils juce::juce_dsp
+    PRIVATE SncAssets juce::juce_audio_utils juce::juce_dsp
     PUBLIC  juce::juce_recommended_config_flags
             juce::juce_recommended_lto_flags
             juce::juce_recommended_warning_flags)
