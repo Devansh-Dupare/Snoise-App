@@ -21,7 +21,7 @@ set(CORE_SOURCES
 
 # ---- Standalone GUI app (no plugin targets) ----
 juce_add_gui_app(SpectralNoiseCancellation
-    PRODUCT_NAME "Spectral Noise Cancellation"
+    PRODUCT_NAME "Snoise Editor"
     COMPANY_NAME "YourName")
 
 target_sources(SpectralNoiseCancellation PRIVATE

@@ -1,6 +1,6 @@
-# Spectral Noise Cancellation
+# Snoise Editor
 
-A JUCE 8 desktop app that removes steady background noise from a recording using a noise profile and
+Snoise Editor is a JUCE 8 desktop app that removes steady background noise from a recording using a noise profile and
 magnitude spectral subtraction. See `docs/report.md` for the method and `docs/demo_script.md` for the demo.
 
 ## Build
@@ -10,7 +10,7 @@ cmake -S . -B build
 cmake --build build
 ```
 
-Targets: `SpectralNoiseCancellation` (the app) and `SNC_Tests` (unit tests).
+Targets: `SpectralNoiseCancellation` (the app, built as "Snoise Editor.app") and `SNC_Tests` (unit tests).
 
 ## Using the app
 

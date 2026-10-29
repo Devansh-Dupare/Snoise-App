@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Snoise Editor Guide</title>
+<style>
+  body { font: 16px/1.55 -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1d1d1f; background: #f5f5f7; margin: 0; }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 24px 72px; }
+  h1 { font-size: 34px; margin: 0 0 4px; }
+  h2 { font-size: 22px; margin: 40px 0 8px; }
+  p.sub { color: #6e6e73; margin: 0 0 24px; }
+  ol, ul { padding-left: 22px; }
+  table { border-collapse: collapse; width: 100%; background: #fff; border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid #e5e5ea; }
+  th { background: #fafafa; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #6e6e73; }
+  td.k { white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: 14px; }
+  .note { background: #fff; border-left: 4px solid #fc8961; padding: 10px 16px; border-radius: 6px; }
+  code { font-family: ui-monospace, Menlo, monospace; font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Snoise Editor</h1>
+<p class="sub">Remove steady background noise (fan, hiss, hum) from a recording.</p>
+
+<h2>Quick start</h2>
+<ol>
+  <li><b>Open a recording</b> with <b>File &gt; Open Audio</b> (<code>&#8984;O</code>), or drop an audio file on the window. WAV, AIFF, FLAC and MP3 are supported.</li>
+  <li><b>Show the app what the noise sounds like.</b> Drag across a part of the waveform that contains only noise (no speech or music), or load a separate noise-only recording with <b>File &gt; Open Noise File</b> (<code>&#8984;&#8679;O</code>) or by dropping it on the Noise profile card. A noise-only file must have the same sample rate as the recording.</li>
+  <li><b>Process.</b> Press <b>Process</b> or <code>&#8984;&#8617;</code>. The button shows progress and turns into Cancel while it runs.</li>
+  <li><b>Compare.</b> Switch between <b>Original</b> and <b>Processed</b> with the toggle, <code>1</code> / <code>2</code>, or <code>Tab</code>. Playback keeps its position when you switch.</li>
+  <li><b>Export.</b> <b>File &gt; Export Processed Audio</b> (<code>&#8984;E</code>) saves a WAV. If the audio would clip, you are offered a normalised copy.</li>
+</ol>
+
+<h2>Noise reduction (alpha)</h2>
+<p>The knob sets <b>alpha</b>: how much of the noise estimate is subtracted. Higher values remove more noise but can leave "musical noise" (bubbling tones) and make speech sound thin. The default is 1.0. Change it with the knob, by typing in the value box, or with the keyboard (<code>]</code> / <code>[</code> in steps of 0.1, add Shift for 0.01, <code>\</code> to reset).</p>
+<p class="note">After you change alpha or the noise region, the processed audio is out of date. Export is disabled until you press Process again, so an exported file always matches the alpha on screen.</p>
+
+<h2>Zooming and scrolling</h2>
+<ul>
+  <li>Hold <code>&#8984;</code> and scroll, or pinch on a trackpad, to zoom around the pointer. The waveform and both spectrograms zoom together.</li>
+  <li>Scroll or swipe sideways to move through time; the bar under the waveform also scrolls.</li>
+  <li><code>&#8984;=</code> / <code>&#8984;-</code> zoom in and out, <code>&#8984;0</code> fits the whole file, <code>Z</code> zooms to the marked noise region.</li>
+</ul>
+
+<h2>Drag and drop</h2>
+<p>Dropping a file on the waveform or spectrograms opens it as the recording. Dropping on the <b>Noise profile</b> card loads it as the noise file (or as the recording, if none is open yet). Files are ignored while processing.</p>
+
+<h2>Keyboard shortcuts</h2>
+<p>On macOS &#8984; is Cmd; on Windows and Linux it is Ctrl. Every shortcut can be changed in <b>Help &gt; Keyboard Shortcuts</b> (<code>&#8984;,</code>); changes are kept between launches.</p>
+<table>
+<tr><th>Action</th><th>Shortcut</th></tr>
+<tr><td>Open audio</td><td class="k">&#8984;O</td></tr>
+<tr><td>Open noise file</td><td class="k">&#8984;&#8679;O</td></tr>
+<tr><td>Export processed audio</td><td class="k">&#8984;E</td></tr>
+<tr><td>Close file</td><td class="k">&#8984;W</td></tr>
+<tr><td>Clear selection</td><td class="k">Esc</td></tr>
+<tr><td>Clear noise profile</td><td class="k">&#8984;&#9003;</td></tr>
+<tr><td>Zoom in / out</td><td class="k">&#8984;= / &#8984;-</td></tr>
+<tr><td>Zoom to fit</td><td class="k">&#8984;0</td></tr>
+<tr><td>Zoom to selection</td><td class="k">Z</td></tr>
+<tr><td>Follow playhead</td><td class="k">F</td></tr>
+<tr><td>Show / hide spectrograms</td><td class="k">&#8984;&#8679;S</td></tr>
+<tr><td>Apply noise reduction (press again to cancel)</td><td class="k">&#8984;&#8617;</td></tr>
+<tr><td>Alpha up / down by 0.1</td><td class="k">] / [</td></tr>
+<tr><td>Alpha up / down by 0.01</td><td class="k">&#8679;] / &#8679;[</td></tr>
+<tr><td>Reset alpha to 1.0</td><td class="k">\</td></tr>
+<tr><td>Play / pause</td><td class="k">Space</td></tr>
+<tr><td>Stop</td><td class="k">.</td></tr>
+<tr><td>Return to start</td><td class="k">Home or Return</td></tr>
+<tr><td>Listen to original / processed</td><td class="k">1 / 2</td></tr>
+<tr><td>Toggle original / processed</td><td class="k">Tab</td></tr>
+<tr><td>Keyboard shortcuts</td><td class="k">&#8984;,</td></tr>
+<tr><td>Quit</td><td class="k">&#8984;Q</td></tr>
+</table>
+
+<h2>Tips</h2>
+<ul>
+  <li>Choose a noise region that is at least a second long and contains <i>only</i> the noise you want to remove. The profile plot should look smooth.</li>
+  <li>Start at alpha 1.0 and raise it only if noise remains. Listen for thin or "watery" sounds as a sign it is too high.</li>
+  <li>This works best on steady noise. It cannot follow noise that changes over time.</li>
+  <li>If Snoise Editor cannot open an audio device, processing and exporting still work; only playback is unavailable.</li>
+</ul>
+
+<h2>If something goes wrong</h2>
+<ul>
+  <li><b>"Noise section is too short"</b>: mark a longer region (at least one analysis frame, about 46 ms; a second or more is better).</li>
+  <li><b>Sample-rate mismatch</b>: the noise file and the recording must have the same sample rate.</li>
+  <li><b>Reset to defaults</b>: delete <code>~/Library/Application Support/SpectralNoiseCancellation/SpectralNoiseCancellation.settings</code> while the app is closed.</li>
+</ul>
+</main>
+</body>
+</html>

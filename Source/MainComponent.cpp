@@ -126,7 +126,7 @@ void MainComponent::paint (juce::Graphics& g)
     g.fillAll (AppLookAndFeel::window);
     g.setColour (AppLookAndFeel::textPrimary);
     g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
-    g.drawText ("Spectral Noise Cancellation", 24, 24, 320, 44, juce::Justification::centredLeft);
+    g.drawText ("Snoise Editor", 24, 24, 320, 44, juce::Justification::centredLeft);
 }
 
 void MainComponent::resized()
@@ -220,7 +220,7 @@ void MainComponent::updateButtons()
 
 void MainComponent::showError (const juce::String& message)
 {
-    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Spectral Noise Cancellation", message);
+    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Snoise Editor", message);
 }
 
 void MainComponent::chooseAndLoadFile()
@@ -420,7 +420,7 @@ void MainComponent::saveCurrent (const juce::File& file, juce::AudioBuffer<float
 
     // Overlap-add of modified frames can overshoot full scale slightly (plan §7.3).
     const auto options = juce::MessageBoxOptions::makeOptionsYesNoCancel (
-        juce::MessageBoxIconType::WarningIcon, "Spectral Noise Cancellation",
+        juce::MessageBoxIconType::WarningIcon, "Snoise Editor",
         "The audio peaks at " + juce::String (20.0f * std::log10 (peak), 1) + " dBFS, above full scale, and will clip.\n\n"
         "Normalise it to -0.1 dBFS before saving?",
         "Normalise", "Save as is", "Cancel");
@@ -741,7 +741,7 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             break;
 
         case CommandIDs::showAbout:
-            info.setInfo ("About Spectral Noise Cancellation", "About this application", Cat::help, 0);
+            info.setInfo ("About Snoise Editor", "About this application", Cat::help, 0);
             break;
 
         default:
@@ -882,7 +882,7 @@ void MainComponent::showShortcutEditor()
 
 void MainComponent::showAbout()
 {
-    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Spectral Noise Cancellation",
+    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Snoise Editor",
                                             "Spectral-subtraction noise reduction.\n\n"
                                             "Mark a noise-only section (or load a noise file), then press Process.");
 }
