@@ -26,6 +26,14 @@ void PlaybackController::setAudio (const juce::AudioBuffer<float>& audio, double
     transport.setSource (memorySource.get(), 0, nullptr, sampleRate);
 }
 
+void PlaybackController::clear()
+{
+    transport.stop();
+    transport.setSource (nullptr);
+    memorySource.reset();
+    buffer.setSize (0, 0);
+}
+
 void PlaybackController::play()
 {
     if (! hasAudio())

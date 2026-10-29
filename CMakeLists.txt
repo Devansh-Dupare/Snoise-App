@@ -34,6 +34,8 @@ target_sources(SpectralNoiseCancellation PRIVATE
     Source/ui/AppLookAndFeel.cpp
     Source/ui/NoiseReductionPanel.cpp
     Source/ui/ActionsPanel.cpp
+    Source/ui/MainMenuModel.cpp
+    Source/io/AppSettings.cpp
     ${CORE_SOURCES})
 
 target_include_directories(SpectralNoiseCancellation PRIVATE Source)
