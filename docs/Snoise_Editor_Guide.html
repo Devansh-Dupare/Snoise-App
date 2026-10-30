@@ -43,6 +43,9 @@
   <li><code>&#8984;=</code> / <code>&#8984;-</code> zoom in and out, <code>&#8984;0</code> fits the whole file, <code>Z</code> zooms to the marked noise region.</li>
 </ul>
 
+<h2>Choosing an audio device</h2>
+<p>By default Snoise Editor plays through the system output. To use another device, such as an audio interface, open <b>Options &gt; Audio Settings...</b> and pick it from the output list. You can also change the sample rate and buffer size there. The choice is remembered between launches; if that device is not connected next time, the app falls back to the system default.</p>
+
 <h2>Drag and drop</h2>
 <p>Dropping a file on the waveform or spectrograms opens it as the recording. Dropping on the <b>Noise profile</b> card loads it as the noise file (or as the recording, if none is open yet). Files are ignored while processing.</p>
 
@@ -79,7 +82,7 @@
   <li>Choose a noise region that is at least a second long and contains <i>only</i> the noise you want to remove. The profile plot should look smooth.</li>
   <li>Start at alpha 1.0 and raise it only if noise remains. Listen for thin or "watery" sounds as a sign it is too high.</li>
   <li>This works best on steady noise. It cannot follow noise that changes over time.</li>
-  <li>If Snoise Editor cannot open an audio device, processing and exporting still work; only playback is unavailable.</li>
+  <li>If Snoise Editor cannot open an audio device, processing and exporting still work; only playback is unavailable. Try another device in <b>Options &gt; Audio Settings...</b>.</li>
 </ul>
 
 <h2>If something goes wrong</h2>
