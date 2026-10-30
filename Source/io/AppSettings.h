@@ -14,6 +14,9 @@ public:
     void saveRecentFiles (const juce::RecentlyOpenedFilesList& recent);
     void restoreRecentFiles (juce::RecentlyOpenedFilesList& recent);
 
+    void saveAudioDeviceState (const juce::XmlElement& state);
+    std::unique_ptr<juce::XmlElement> restoreAudioDeviceState();
+
     void saveAlpha (double alpha);
     double restoreAlpha (double fallback);
 

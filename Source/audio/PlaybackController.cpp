@@ -1,8 +1,8 @@
 #include "PlaybackController.h"
 
-PlaybackController::PlaybackController()
+PlaybackController::PlaybackController (const juce::XmlElement* savedDeviceState)
 {
-    deviceError = deviceManager.initialiseWithDefaultDevices (0, 2);
+    deviceError = deviceManager.initialise (0, 2, savedDeviceState, true);
     player.setSource (&transport);
     deviceManager.addAudioCallback (&player);
 }

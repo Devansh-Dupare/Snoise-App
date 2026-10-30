@@ -44,7 +44,10 @@ namespace CommandIDs
 
         // Help
         showKeyboardShortcuts = 0x2500,
-        showAbout
+        showAbout,
+
+        // Options
+        showAudioSettings = 0x2600
     };
 }
 
@@ -55,6 +58,7 @@ namespace CommandCategories
     static constexpr const char* view     = "View";
     static constexpr const char* process  = "Process";
     static constexpr const char* playback = "Playback";
+    static constexpr const char* options  = "Options";
     static constexpr const char* help     = "Help";
 }
 

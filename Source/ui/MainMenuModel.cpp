@@ -11,7 +11,7 @@ MainMenuModel::MainMenuModel (juce::ApplicationCommandManager& cm,
 
 juce::StringArray MainMenuModel::getMenuBarNames()
 {
-    return { "File", "Edit", "View", "Process", "Playback", "Help" };
+    return { "File", "Edit", "View", "Process", "Playback", "Options", "Help" };
 }
 
 juce::PopupMenu MainMenuModel::getMenuForIndex (int index, const juce::String&)
@@ -67,7 +67,11 @@ juce::PopupMenu MainMenuModel::getMenuForIndex (int index, const juce::String&)
             add (listenOriginal); add (listenProcessed); add (toggleListenSource);
             break;
 
-        case 5: // Help
+        case 5: // Options
+            add (showAudioSettings);
+            break;
+
+        case 6: // Help
             add (showKeyboardShortcuts);
             add (showAbout);
             break;

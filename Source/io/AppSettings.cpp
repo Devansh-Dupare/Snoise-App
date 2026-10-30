@@ -37,6 +37,17 @@ void AppSettings::restoreRecentFiles (juce::RecentlyOpenedFilesList& recent)
     recent.restoreFromString (user().getValue ("recentFiles"));
 }
 
+void AppSettings::saveAudioDeviceState (const juce::XmlElement& state)
+{
+    user().setValue ("audioDevice", &state);
+    user().saveIfNeeded();
+}
+
+std::unique_ptr<juce::XmlElement> AppSettings::restoreAudioDeviceState()
+{
+    return user().getXmlValue ("audioDevice");
+}
+
 void AppSettings::saveAlpha (double alpha)
 {
     user().setValue ("alpha", alpha);

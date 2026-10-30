@@ -67,6 +67,7 @@ private:
     void setStatus (const juce::String& text);
     void showShortcutEditor();
     void showAbout();
+    void showAudioSettings();
     bool hasInputAudio() const { return input.buffer.getNumSamples() > 0; }
     double zoomAnchor() const;
     void toggleListenSource();
@@ -110,7 +111,8 @@ private:
     NoiseReductionEngine engine;
     std::vector<NoiseProfile> noiseProfiles;
 
-    PlaybackController playback;
+    std::unique_ptr<juce::XmlElement> savedDeviceState { settings.restoreAudioDeviceState() };
+    PlaybackController playback { savedDeviceState.get() };
     WaveformView waveform { viewState };
     juce::ScrollBar timeScrollBar { false };
     NoiseProfileView noiseProfileView;

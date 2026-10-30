@@ -7,8 +7,12 @@
 class PlaybackController
 {
 public:
-    PlaybackController();
+    // `savedDeviceState` is a previous AudioDeviceManager::createStateXml(); null (or an unavailable
+    // device) falls back to the system default output.
+    explicit PlaybackController (const juce::XmlElement* savedDeviceState = nullptr);
     ~PlaybackController();
+
+    juce::AudioDeviceManager& getDeviceManager() { return deviceManager; }
 
     // Empty string when the audio device opened; otherwise the reason it did not.
     const juce::String& getDeviceError() const { return deviceError; }

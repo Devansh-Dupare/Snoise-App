@@ -27,6 +27,7 @@ MainComponent::MainComponent()
     settings.restoreKeyMappings (*commandManager.getKeyMappings());   // after registration, so defaults exist
     commandManager.getKeyMappings()->addChangeListener (this);
     viewState.addChangeListener (this);
+    playback.getDeviceManager().addChangeListener (this);
     addKeyListener (commandManager.getKeyMappings());
     setWantsKeyboardFocus (true);
 
@@ -104,6 +105,7 @@ MainComponent::~MainComponent()
 
     commandManager.getKeyMappings()->removeChangeListener (this);
     viewState.removeChangeListener (this);
+    playback.getDeviceManager().removeChangeListener (this);
     stopTimer();
     cancelRequested = true;
     if (worker != nullptr)
@@ -565,7 +567,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& c)
                   zoomIn, zoomOut, zoomToFit, zoomToSelection, followPlayhead, toggleSpectrograms,
                   applyNoiseReduction, alphaUp, alphaDown, alphaUpFine, alphaDownFine, alphaReset,
                   playPause, stop, returnToStart, listenOriginal, listenProcessed, CommandIDs::toggleListenSource,
-                  showKeyboardShortcuts, CommandIDs::showAbout });
+                  showKeyboardShortcuts, CommandIDs::showAbout, CommandIDs::showAudioSettings });
 }
 
 void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -746,6 +748,10 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
             info.setInfo ("About Snoise Editor", "About this application", Cat::help, 0);
             break;
 
+        case CommandIDs::showAudioSettings:
+            info.setInfo ("Audio Settings...", "Choose the audio output device and its settings", Cat::options, 0);
+            break;
+
         default:
             break;
     }
@@ -803,6 +809,7 @@ bool MainComponent::perform (const InvocationInfo& info)
 
         case showKeyboardShortcuts:   showShortcutEditor();                                   break;
         case CommandIDs::showAbout:               showAbout();                                            break;
+        case CommandIDs::showAudioSettings:       showAudioSettings();                                    break;
 
         default: return false;
     }
@@ -848,6 +855,11 @@ void MainComponent::changeListenerCallback (juce::ChangeBroadcaster* source)
 {
     if (source == commandManager.getKeyMappings())
         settings.saveKeyMappings (*commandManager.getKeyMappings());
+    else if (source == &playback.getDeviceManager())
+    {
+        if (auto state = playback.getDeviceManager().createStateXml())
+            settings.saveAudioDeviceState (*state);
+    }
     else if (source == &viewState)
     {
         updateScrollBar();
@@ -879,6 +891,23 @@ void MainComponent::showShortcutEditor()
     o.escapeKeyTriggersCloseButton = true;
     o.useNativeTitleBar = true;
     o.resizable = true;
+    o.launchAsync();
+}
+
+void MainComponent::showAudioSettings()
+{
+    // Output only: the app plays audio back and never records. No MIDI options.
+    auto* selector = new juce::AudioDeviceSelectorComponent (playback.getDeviceManager(), 0, 0, 0, 2,
+                                                             false, false, true, false);
+    selector->setSize (500, 360);
+
+    juce::DialogWindow::LaunchOptions o;
+    o.content.setOwned (selector);
+    o.dialogTitle = "Audio Settings";
+    o.dialogBackgroundColour = AppLookAndFeel::window;
+    o.escapeKeyTriggersCloseButton = true;
+    o.useNativeTitleBar = true;
+    o.resizable = false;
     o.launchAsync();
 }
 
